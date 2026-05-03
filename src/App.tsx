@@ -58,9 +58,17 @@ export default function App() {
     delayFeedback: null as GainNode | null,
     // Recording / Loop State
     recordedEvents: [] as { timeOffset: number, freq: number, magnitude: number }[],
+    savedLoops: [] as { id: string, x: number, y: number, hue: number, events: { timeOffset: number, freq: number, magnitude: number }[] }[],
     loopLength: 5000, // 5 second loop
     loopStartTime: 0,
     lastLoopCheck: 0,
+    // FX Controls
+    spectrumIntensity: 0.8,
+    bpm: 120,
+    // Auto-Tempo tracking
+    lastReleaseTimes: [] as number[],
+    // UI Collision
+    uiOffset: { x: 0, y: 0 },
     // Idle Animation State
     idleTime: 0,
     startPos: [] as { x: number, y: number }[],
@@ -222,15 +230,13 @@ export default function App() {
         const now = state.audioCtx.currentTime * 1000;
         const relativeTime = (now - state.loopStartTime) % state.loopLength;
         
-        // Find events that should play between lastLoopCheck and relativeTime
+        // 1. Play active recording buffer
         state.recordedEvents.forEach(event => {
-          // Normal loop check or wrap-around check
           const play = (state.lastLoopCheck < event.timeOffset && relativeTime >= event.timeOffset) ||
                        (state.lastLoopCheck > relativeTime && (event.timeOffset > state.lastLoopCheck || event.timeOffset <= relativeTime));
           
           if (play) {
             playPluck(event.freq);
-            // Spawn a faint ghost ripple at cx, cy for loop visibility
             state.ripples.push({
               x: cx,
               y: cy,
@@ -240,6 +246,26 @@ export default function App() {
             });
           }
         });
+
+        // 2. Play saved loops
+        state.savedLoops.forEach(loop => {
+          loop.events.forEach(event => {
+            const play = (state.lastLoopCheck < event.timeOffset && relativeTime >= event.timeOffset) ||
+                         (state.lastLoopCheck > relativeTime && (event.timeOffset > state.lastLoopCheck || event.timeOffset <= relativeTime));
+            
+            if (play) {
+              playPluck(event.freq * 0.8); // Slightly lower pitch for background loops
+              state.ripples.push({
+                x: loop.x,
+                y: loop.y,
+                r: 30 * event.magnitude,
+                alpha: 0.2,
+                color: `hsla(${loop.hue}, 100%, 70%, 0.2)`
+              });
+            }
+          });
+        });
+
         state.lastLoopCheck = relativeTime;
       }
 
@@ -252,6 +278,25 @@ export default function App() {
       // 1. Clear & Draw Background Grid
       ctx.fillStyle = '#0A0A0F';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw Saved Loop Blobs
+      state.savedLoops.forEach(loop => {
+        const osc = Math.sin(time * 0.003) * 3;
+        ctx.save();
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = `hsla(${loop.hue}, 100%, 70%, 0.4)`;
+        ctx.fillStyle = `hsla(${loop.hue}, 100%, 70%, 0.15)`;
+        ctx.beginPath();
+        ctx.arc(loop.x, loop.y, 10 + osc, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.strokeStyle = `hsla(${loop.hue}, 100%, 70%, 0.3)`;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.arc(loop.y % 10 > 5 ? loop.x : loop.x, loop.y, 15 + osc * 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      });
 
       ctx.lineWidth = 1;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
@@ -299,9 +344,10 @@ export default function App() {
         });
       }
       
+      // Update ghosts with intensity
       state.ghosts = state.ghosts.map(g => ({
         ...g,
-        alpha: g.alpha - 0.04,
+        alpha: g.alpha - (0.05 * (2 - state.spectrumIntensity)),
         r: g.r * 0.99
       })).filter(g => g.alpha > 0);
 
@@ -351,8 +397,8 @@ export default function App() {
           anchors.forEach(anchor => {
             const dx = anchor.x - state.x;
             const dy = anchor.y - state.y;
-            state.vx += dx * k;
-            state.vy += dy * k;
+            state.vx += dx * state.k;
+            state.vy += dy * state.k;
           });
 
           const cdx = cx - state.x;
@@ -363,8 +409,8 @@ export default function App() {
           state.vx += state.tilt.x * 0.6;
           state.vy += state.tilt.y * 0.6;
 
-          state.vx *= damping;
-          state.vy *= damping;
+          state.vx *= state.damping;
+          state.vy *= state.damping;
           state.x += state.vx;
           state.y += state.vy;
         }
@@ -574,10 +620,26 @@ export default function App() {
           }
         }
 
-        const finalVal = Math.round(state.maxDist);
-        setMetrics(m => ({ input: m.input, output: finalVal }));
+        // Auto-Tempo Calculation
+        const nowMs = Date.now();
+        state.lastReleaseTimes.push(nowMs);
+        if (state.lastReleaseTimes.length > 4) state.lastReleaseTimes.shift();
         
-        setTimeout(() => setMetrics(m => ({ ...m, input: 0 })), 500);
+        if (state.lastReleaseTimes.length >= 2) {
+          const diffs = [];
+          for (let i = 1; i < state.lastReleaseTimes.length; i++) {
+            diffs.push(state.lastReleaseTimes[i] - state.lastReleaseTimes[i-1]);
+          }
+          const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+          // If interaction is within a reasonable BPM range (40 - 240)
+          if (avgDiff > 250 && avgDiff < 1500) {
+            state.loopLength = avgDiff;
+            state.bpm = Math.round(60000 / avgDiff);
+          }
+        }
+        
+        const finalVal = Math.round(state.maxDist);
+        setMetrics(m => ({ ...m, input: 0, output: finalVal }));
 
         if (finalVal > 20) {
           state.particles.push({
@@ -655,8 +717,107 @@ export default function App() {
         className="absolute inset-0 cursor-crosshair"
       />
 
-      {/* HUD Container */}
-      <div className="absolute top-10 left-1/2 -translate-x-1/2 flex items-center gap-12 z-20 w-full justify-center px-6">
+      {/* Control Panel (Reactive Position) */}
+      <motion.div 
+        animate={{ 
+          x: stateRef.current.isDragging && stateRef.current.x < 350 && stateRef.current.y > (window.innerHeight - 350) ? 50 : 0,
+        }}
+        className="absolute bottom-10 left-10 p-5 bg-black/40 backdrop-blur-xl border border-white/5 flex flex-col gap-5 pointer-events-auto z-50 min-w-[220px]"
+      >
+        <div className="flex items-center justify-between border-b border-white/5 pb-3">
+          <span className="text-[10px] text-slate-500 uppercase tracking-widest font-medium">FX Matrix</span>
+          <div className="flex gap-1.5">
+            <div className={`w-1.5 h-1.5 rounded-full ${audioEnabled ? 'bg-cyan-500 shadow-[0_0_8px_rgba(34,211,238,0.5)]' : 'bg-slate-800'}`} />
+            <div className={`w-1.5 h-1.5 rounded-full ${stateRef.current.recordedEvents.length > 0 ? 'bg-fuchsia-500 animate-pulse' : 'bg-slate-800'}`} />
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {[
+            { label: 'Elasticity', key: 'k', min: 0.005, max: 0.1, step: 0.001 },
+            { label: 'Damping', key: 'damping', min: 0.7, max: 0.99, step: 0.01 },
+            { label: 'Spectrum', key: 'spectrumIntensity', min: 0, max: 2, step: 0.1 },
+          ].map(slider => (
+            <div key={slider.key} className="space-y-1.5">
+              <div className="flex justify-between text-[9px] text-slate-400 uppercase tracking-tighter">
+                <span>{slider.label}</span>
+                <span className="text-cyan-500 font-mono">{(stateRef.current as any)[slider.key].toFixed(3)}</span>
+              </div>
+              <input 
+                type="range"
+                min={slider.min}
+                max={slider.max}
+                step={slider.step}
+                defaultValue={(stateRef.current as any)[slider.key]}
+                onChange={(e) => {
+                  (stateRef.current as any)[slider.key] = parseFloat(e.target.value);
+                  setMetrics(m => ({ ...m })); 
+                }}
+                className="w-full h-1 bg-slate-800 appearance-none rounded-full accent-cyan-500 cursor-pointer"
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="pt-3 border-t border-white/5 space-y-3">
+          {!motionActive && (
+            <button 
+              onClick={() => (window as any).enableMotion?.()}
+              className="w-full py-2 bg-white/5 border border-white/10 hover:bg-fuchsia-500/20 transition-all text-[9px] uppercase tracking-widest"
+            >
+              Enable Motion
+            </button>
+          )}
+
+          <div className="flex gap-2">
+            {!audioEnabled ? (
+              <button 
+                onClick={initAudio}
+                className="flex-1 py-2 bg-white/5 border border-white/10 hover:bg-cyan-500/20 transition-all text-[9px] uppercase tracking-widest"
+              >
+                Audio Eng
+              </button>
+            ) : (
+              <div className="flex flex-col w-full gap-2">
+                <button 
+                  onClick={() => {
+                    const state = stateRef.current;
+                    if (state.recordedEvents.length > 0) {
+                      state.savedLoops.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        x: 100 + Math.random() * (window.innerWidth - 200),
+                        y: 100 + Math.random() * (window.innerHeight - 200),
+                        hue: state.hueCycle,
+                        events: [...state.recordedEvents]
+                      });
+                      state.recordedEvents = [];
+                      setMetrics(m => ({...m}));
+                    }
+                  }}
+                  className="w-full py-2 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/30 transition-all text-[9px] uppercase tracking-widest text-cyan-400"
+                >
+                  Capture Loop
+                </button>
+                <button 
+                  onClick={() => { stateRef.current.recordedEvents = []; stateRef.current.savedLoops = []; setMetrics(m => ({...m})); }}
+                  className="w-full py-2 bg-white/5 border border-white/10 hover:bg-red-500/20 transition-all text-[9px] uppercase tracking-widest"
+                >
+                  Clear All
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Primary Metrics HUD */}
+      <motion.div 
+        animate={{ 
+          y: stateRef.current.isDragging && stateRef.current.y < 200 ? -20 : 0,
+          opacity: stateRef.current.isDragging && stateRef.current.y < 200 ? 0.3 : 1
+        }}
+        className="absolute top-10 left-1/2 -translate-x-1/2 flex items-center gap-12 z-20 w-full justify-center px-6 pointer-events-none"
+      >
         {/* Tension Panel */}
         <div className="flex flex-col items-center w-48">
           <span className="text-[10px] tracking-[0.3em] text-slate-500 mb-2 uppercase">Input Tension</span>
@@ -687,52 +848,13 @@ export default function App() {
             />
           </div>
         </div>
-      </div>
+      </motion.div>
 
-      {/* Footer Left */}
-      <div className="absolute bottom-10 left-10 text-[10px] text-slate-600 tracking-widest uppercase flex flex-col gap-2 pointer-events-none">
-        <div className="flex items-center gap-3">
-          <span>System: <span className={isInteractionActive ? "text-cyan-500" : "text-slate-600"}>Active</span></span>
-          <div className="w-1 h-1 rounded-full bg-slate-800" />
-          <span>Motion: <span className={motionActive ? "text-fuchsia-500" : "text-slate-600"}>{motionActive ? "ON" : "OFF"}</span></span>
-          <div className="w-1 h-1 rounded-full bg-slate-800" />
-          <span>Audio: <span className={audioEnabled ? "text-cyan-400" : "text-slate-600"}>{audioEnabled ? "ON" : "OFF"}</span></span>
-        </div>
-        <div>Mode: Multi-Point Equilibrium</div>
-        <div className="animate-pulse">Status: {stateRef.current.isDragging ? 'Object Bound' : stateRef.current.releaseDelay > 0 ? 'Release Latency' : 'Awaiting Interface'}</div>
-        <div className="flex gap-2 mt-2">
-          {!motionActive && (
-            <button 
-              onClick={() => (window as any).enableMotion?.()}
-              className="pointer-events-auto px-3 py-1 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[9px]"
-            >
-              Enable Motion
-            </button>
-          )}
-          {!audioEnabled ? (
-            <button 
-              onClick={initAudio}
-              className="pointer-events-auto px-3 py-1 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[9px]"
-            >
-              Enable Audio
-            </button>
-          ) : (
-            <button 
-              onClick={() => { stateRef.current.recordedEvents = []; }}
-              className="pointer-events-auto px-3 py-1 bg-white/5 border border-white/10 hover:text-red-400 transition-colors text-[9px]"
-            >
-              Clear Loop ({stateRef.current.recordedEvents.length})
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Footer Right */}
+      {/* Footer Right (Adaptive Status) */}
       <div className="absolute bottom-10 right-10 text-right text-[10px] text-slate-600 tracking-widest uppercase pointer-events-none flex flex-col gap-1">
-        <div>Vector Balance Engine v1.0.6</div>
-        <div>Pinch to Stretch Weight</div>
-        <div className={audioEnabled ? "text-cyan-400" : "text-slate-600"}>Loop Recording: {audioEnabled ? "Auto" : "Off"}</div>
-        <div className="text-cyan-400/50 text-[8px] animate-pulse">Sync: {Math.floor(stateRef.current.lastLoopCheck / 100)}ms</div>
+        <div className="text-cyan-400 font-mono mb-2">{stateRef.current.bpm} BPM // AUTO-TEMPO</div>
+        <div>Vector Balance Engine v1.0.8</div>
+        <div className="text-slate-400/50">Status: {stateRef.current.isDragging ? 'Dragging' : 'Equilibrium'}</div>
       </div>
     </div>
   );
