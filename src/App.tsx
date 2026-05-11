@@ -95,6 +95,32 @@ export default function App() {
   const [motionActive, setMotionActive] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
 
+  const handleOrientation = (e: DeviceOrientationEvent) => {
+    if (e.beta !== null && e.gamma !== null) {
+      stateRef.current.tilt = {
+        x: e.gamma / 10,
+        y: e.beta / 10
+      };
+    }
+  };
+
+  const enableMotion = async () => {
+    if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+      try {
+        const response = await (DeviceOrientationEvent as any).requestPermission();
+        if (response === 'granted') {
+          setMotionActive(true);
+          window.addEventListener('deviceorientation', handleOrientation);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      setMotionActive(true);
+      window.addEventListener('deviceorientation', handleOrientation);
+    }
+  };
+
   // Audio Synthesis Utilities
   const initAudio = () => {
     if (stateRef.current.audioCtx) return;
@@ -104,16 +130,29 @@ export default function App() {
     // Setup Delay Effect for Plucks
     const delay = ctx.createDelay(1.0);
     delay.delayTime.value = 0.25; // Quarter note-ish
+    
+    // Create filter for delay effect
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1000; // Default frequency
+
     const feedback = ctx.createGain();
     feedback.gain.value = 0.4; // Feedback amount
 
-    delay.connect(feedback);
+    delay.connect(filter);
+    filter.connect(feedback);
     feedback.connect(delay);
-    delay.connect(ctx.destination);
+    filter.connect(ctx.destination);
 
     stateRef.current.delayNode = delay;
     stateRef.current.delayFeedback = feedback;
     stateRef.current.loopStartTime = ctx.currentTime * 1000;
+    
+    // Add Analyser for visualization
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    delay.connect(analyser); // Connect from delay to visualize effect mix
+    (window as any).audioAnalyser = analyser;
 
     setAudioEnabled(true);
   };
@@ -338,6 +377,26 @@ export default function App() {
         ctx.stroke();
         ctx.restore();
       });
+
+      // Draw Spectrum Visualizer
+      if (audioEnabled && (window as any).audioAnalyser) {
+        const analyser = (window as any).audioAnalyser as AnalyserNode;
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.strokeStyle = 'cyan';
+        ctx.lineWidth = 2;
+        const barWidth = canvas.width / data.length;
+        for (let i = 0; i < data.length; i++) {
+          const barHeight = (data[i] / 255) * 100;
+          ctx.moveTo(i * barWidth, canvas.height);
+          ctx.lineTo(i * barWidth, canvas.height - barHeight);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // Update Hue & Spectrum Ghosts
       if (state.isDragging) {
@@ -588,7 +647,6 @@ export default function App() {
     const handlePointerUp = (e: PointerEvent) => {
       const state = stateRef.current;
       const wasDragging = state.isDragging;
-      const duration = Date.now() - state.lastTapTime;
       const pt = state.pointers.get(e.pointerId);
 
       state.pointers.delete(e.pointerId);
@@ -672,42 +730,11 @@ export default function App() {
       }
     };
 
-    const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (e.beta !== null && e.gamma !== null) {
-        stateRef.current.tilt = {
-          x: e.gamma / 10,
-          y: e.beta / 10
-        };
-      }
-    };
-
-    const enableMotion = async () => {
-      if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-        try {
-          const response = await (DeviceOrientationEvent as any).requestPermission();
-          if (response === 'granted') {
-            setMotionActive(true);
-            window.addEventListener('deviceorientation', handleOrientation);
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      } else {
-        setMotionActive(true);
-        window.addEventListener('deviceorientation', handleOrientation);
-      }
-    };
-    (window as any).enableMotion = enableMotion; // Expose for the button
+    const animationId = requestAnimationFrame(animate);
 
     window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
-    // Don't auto-add orientation until enabled/granted on iOS
-    if (typeof (DeviceOrientationEvent as any).requestPermission !== 'function') {
-       window.addEventListener('deviceorientation', handleOrientation);
-    }
-
-    const animationId = requestAnimationFrame(animate);
 
     return () => {
       cancelAnimationFrame(animationId);
@@ -726,7 +753,7 @@ export default function App() {
     <div className="fixed inset-0 bg-[#0A0A0F] text-white font-mono overflow-hidden select-none touch-none">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 cursor-crosshair"
+        className="absolute inset-0 cursor-crosshair z-0"
       />
 
       {/* Control Panel (Reactive Position) */}
@@ -746,15 +773,20 @@ export default function App() {
 
         <div className="space-y-4">
           {[
-            { label: 'Elasticity', key: 'k', min: 0.005, max: 0.1, step: 0.001 },
-            { label: 'Damping', key: 'damping', min: 0.7, max: 0.99, step: 0.01 },
-            { label: 'Spectrum', key: 'spectrumIntensity', min: 0, max: 2, step: 0.1 },
+            { label: 'Elasticity', key: 'k', min: 0.005, max: 0.1, step: 0.001, tooltip: 'Adjusts the spring tension of the audio plucks' },
+            { label: 'Damping', key: 'damping', min: 0.7, max: 0.99, step: 0.01, tooltip: 'Controls how fast the sound decays' },
+            { label: 'Spectrum', key: 'spectrumIntensity', min: 0, max: 2, step: 0.1, tooltip: 'Sets the visual intensity of the frequency spectrum' },
           ].map(slider => (
-            <div key={slider.key} className="space-y-1.5">
+            <div key={slider.key} className="space-y-1.5 group relative">
               <div className="flex justify-between text-[9px] text-slate-400 uppercase tracking-tighter">
                 <span>{slider.label}</span>
                 <span className="text-cyan-500 font-mono">{(stateRef.current as any)[slider.key].toFixed(3)}</span>
               </div>
+              
+              <div className="absolute -left-2 -top-8 bg-black/80 text-cyan-200 py-1 px-2 rounded text-[8px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-white/10 shadow-xl font-sans">
+                {slider.tooltip}
+              </div>
+
               <input 
                 type="range"
                 min={slider.min}
@@ -785,7 +817,8 @@ export default function App() {
                     className="flex-1 bg-white/5 py-1 px-2 text-[9px] text-white focus:outline-none focus:bg-white/10"
                   />
                   <button 
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setSavedLoops(savedLoops.filter(l => l.id !== loop.id));
                     }}
                     className="text-red-400 hover:text-red-300 transition-colors text-[9px]"
@@ -799,19 +832,23 @@ export default function App() {
         )}
 
         <div className="pt-3 border-t border-white/5 space-y-3">
-          {!motionActive && (
-            <button 
-              onClick={() => (window as any).enableMotion?.()}
-              className="w-full py-2 bg-white/5 border border-white/10 hover:bg-fuchsia-500/20 transition-all text-[9px] uppercase tracking-widest"
-            >
-              Enable Motion
-            </button>
-          )}
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              enableMotion();
+            }}
+            className={`w-full py-2 border transition-all text-[9px] uppercase tracking-widest ${motionActive ? 'bg-fuchsia-500/20 border-fuchsia-500/50 text-fuchsia-400' : 'bg-white/5 border-white/10 hover:bg-fuchsia-500/20'}`}
+          >
+            {motionActive ? 'Motion Active' : 'Enable Motion'}
+          </button>
 
           <div className="flex gap-2">
             {!audioEnabled ? (
               <button 
-                onClick={initAudio}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  initAudio();
+                }}
                 className="flex-1 py-2 bg-white/5 border border-white/10 hover:bg-cyan-500/20 transition-all text-[9px] uppercase tracking-widest"
               >
                 Audio Eng
@@ -819,7 +856,8 @@ export default function App() {
             ) : (
               <div className="flex flex-col w-full gap-2">
                 <button 
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     const state = stateRef.current;
                     if (state.recordedEvents.length > 0) {
                       setSavedLoops([...savedLoops, {
@@ -839,7 +877,12 @@ export default function App() {
                   Capture Loop
                 </button>
                 <button 
-                  onClick={() => { stateRef.current.recordedEvents = []; setSavedLoops([]); setMetrics(m => ({...m})); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    stateRef.current.recordedEvents = []; 
+                    setSavedLoops([]); 
+                    setMetrics(m => ({...m})); 
+                  }}
                   className="w-full py-2 bg-white/5 border border-white/10 hover:bg-red-500/20 transition-all text-[9px] uppercase tracking-widest"
                 >
                   Clear All
