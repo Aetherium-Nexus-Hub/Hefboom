@@ -2,5 +2,5 @@
   "name": "Elastic Momentum",
   "description": "An interactive physics game measuring tension and kinetic energy through an elastic catapult.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

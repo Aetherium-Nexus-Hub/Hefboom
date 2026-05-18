@@ -98,6 +98,34 @@ export default function App() {
   const [motionActive, setMotionActive] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const triggerAnalysis = async () => {
+    if (isAnalyzing) return;
+    setIsAnalyzing(true);
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          metrics,
+          loopsCount: savedLoops.length,
+          bpm: stateRef.current.bpm
+        })
+      });
+      const data = await response.json();
+      if (data.analysis) {
+        setAnalysis(data.analysis);
+        // Clear analysis after 8 seconds
+        setTimeout(() => setAnalysis(null), 8000);
+      }
+    } catch (e) {
+      console.error("Analysis failed", e);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleOrientation = (e: DeviceOrientationEvent) => {
     if (e.beta !== null && e.gamma !== null) {
@@ -826,8 +854,27 @@ export default function App() {
 
       {/* DAW Header/Transport */}
       <div className="absolute top-4 left-4 right-4 z-50 p-3 bg-black/60 backdrop-blur-md border border-white/10 flex justify-between items-center pointer-events-auto">
-          <h1 className="text-sm font-bold tracking-widest">GEMINI DAW</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-sm font-bold tracking-widest">GEMINI DAW</h1>
+            {analysis && (
+              <motion.div 
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+                className="text-[10px] text-cyan-400 font-medium italic border-l border-cyan-500/30 pl-3 max-w-sm truncate"
+              >
+                "{analysis}"
+              </motion.div>
+            )}
+          </div>
           <div className="flex gap-2">
+              <button 
+                onClick={triggerAnalysis}
+                disabled={isAnalyzing}
+                className="px-4 py-1.5 bg-fuchsia-900/40 hover:bg-fuchsia-800 border border-fuchsia-500/30 text-[10px] tracking-widest disabled:opacity-50"
+              >
+                {isAnalyzing ? "ANALYZING..." : "AI INSIGHT"}
+              </button>
               <button onClick={() => setIsPlaying(!isPlaying)} className="px-4 py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-xs">
                   {isPlaying ? "STOP" : "PLAY"}
               </button>
