@@ -22,7 +22,51 @@ async function startServer() {
     }
   });
 
-  // API Route for AI analysis
+  // API Route for Sovereign Shift analysis
+  app.post("/api/sovereign-shift", async (req, res) => {
+    try {
+      const { direction, magnitude, resonance } = req.body;
+      
+      // Validation logic from Hefboom specs
+      const DRAG_THRESHOLD = 60;
+      if (magnitude < DRAG_THRESHOLD || resonance < 0.6) {
+        return res.json({ 
+          status: "Stabilizing...", 
+          insight: "Resonance insufficient for shift. Maintain tension." 
+        });
+      }
+
+      const prompt = `You are the Aetherium Observer. A Sovereign Shift has occurred.
+      Direction: ${direction}
+      Magnitude: ${magnitude}
+      Resonance: ${resonance}
+      
+      Based on the direction:
+      - East (TravGuild): Expansion, commerce, movement.
+      - South (HENS): Contemplation, ethics, grounding.
+      - West (Observer): Data, logs, memory.
+      - North (Trinity): Coordination, command, unity.
+      
+      Provide a one-sentence prophetic status on this shift. Keep it under 12 words and highly futuristic.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt
+      });
+      
+      const text = response.text || "Oscillating transients in equilibrium.";
+      
+      res.json({ 
+        status: "Shift confirmed",
+        insight: text.trim() 
+      });
+    } catch (error) {
+      console.error("Gemini Error:", error);
+      res.status(500).json({ error: "Failed to process shift" });
+    }
+  });
+
+  // API Route for AI analysis (legacy support)
   app.post("/api/analyze", async (req, res) => {
     try {
       const { metrics, loopsCount, bpm } = req.body;

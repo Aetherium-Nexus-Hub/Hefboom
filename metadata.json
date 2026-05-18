@@ -1,6 +1,6 @@
 {
-  "name": "Elastic Momentum",
-  "description": "An interactive physics game measuring tension and kinetic energy through an elastic catapult.",
+  "name": "Hefboom - Aetherium",
+  "description": "A high-fidelity interface for directional vector shifting and resonance visualization.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -93,6 +93,8 @@ export default function App() {
     hasChimed: false, // Initialize chime flag
     currentInput: 0,
     lastOutput: 0,
+    shiftTriggered: false,
+    lastDirection: "" as "North" | "South" | "East" | "West" | "",
   });
 
   const [motionActive, setMotionActive] = useState(false);
@@ -101,27 +103,26 @@ export default function App() {
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const triggerAnalysis = async () => {
+  const triggerShift = async (direction: string, magnitude: number) => {
     if (isAnalyzing) return;
     setIsAnalyzing(true);
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/api/sovereign-shift", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          metrics,
-          loopsCount: savedLoops.length,
-          bpm: stateRef.current.bpm
+          direction,
+          magnitude,
+          resonance: 0.7 + Math.random() * 0.3 // Mocking resonance for now
         })
       });
       const data = await response.json();
-      if (data.analysis) {
-        setAnalysis(data.analysis);
-        // Clear analysis after 8 seconds
-        setTimeout(() => setAnalysis(null), 8000);
+      if (data.insight) {
+        setAnalysis(data.insight);
+        setTimeout(() => setAnalysis(null), 10000);
       }
     } catch (e) {
-      console.error("Analysis failed", e);
+      console.error("Shift failed", e);
     } finally {
       setIsAnalyzing(false);
     }
@@ -728,6 +729,27 @@ export default function App() {
         setMetrics(m => ({ ...m, input: Math.round(d) }));
         updateDrone(d);
 
+        // Directional Shift Detection
+        if (d > 60 && !state.shiftTriggered) {
+          const angle = Math.atan2(state.y - state.cy, state.x - state.cx);
+          const deg = angle * (180 / Math.PI);
+          let direction = "" as "North" | "South" | "East" | "West";
+          
+          if (deg > -45 && deg <= 45) direction = "East";
+          else if (deg > 45 && deg <= 135) direction = "South";
+          else if (deg > 135 || deg <= -135) direction = "West";
+          else direction = "North";
+
+          if (direction !== state.lastDirection) {
+            state.lastDirection = direction;
+            state.shiftTriggered = true;
+            triggerShift(direction, d);
+            playPluck(direction === "North" ? 440 : direction === "South" ? 220 : direction === "East" ? 330 : 165);
+          }
+        } else if (d < 50) {
+          state.shiftTriggered = false;
+        }
+
         if (state.pointers.size === 2) {
           const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
           if (state.initialPinchDist > 0) {
@@ -853,48 +875,73 @@ export default function App() {
       />
 
       {/* DAW Header/Transport */}
-      <div className="absolute top-4 left-4 right-4 z-50 p-3 bg-black/60 backdrop-blur-md border border-white/10 flex justify-between items-center pointer-events-auto">
-          <div className="flex items-center gap-3">
-            <h1 className="text-sm font-bold tracking-widest">GEMINI DAW</h1>
+      <div className="absolute top-0 sm:top-4 left-0 sm:left-4 right-0 sm:right-4 z-50 p-2 sm:p-3 bg-black/60 backdrop-blur-md border-b sm:border border-cyan-500/20 flex justify-between items-center pointer-events-auto">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <h1 className="text-[10px] sm:text-sm font-bold tracking-widest truncate max-w-[80px] sm:max-w-none text-cyan-400">HEFBOOM AETHERIUM</h1>
             {analysis && (
               <motion.div 
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0 }}
-                className="text-[10px] text-cyan-400 font-medium italic border-l border-cyan-500/30 pl-3 max-w-sm truncate"
+                className="hidden sm:block text-[10px] text-fuchsia-400 font-medium italic border-l border-fuchsia-500/30 pl-3 max-w-sm truncate"
               >
                 "{analysis}"
               </motion.div>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-1.5 sm:gap-2">
+              <div className="flex items-center px-3 bg-white/5 border border-white/10 text-[8px] sm:text-[10px] tracking-widest text-slate-400 hidden sm:flex">
+                {stateRef.current.lastDirection || "IDLE"}
+              </div>
               <button 
-                onClick={triggerAnalysis}
+                onClick={() => stateRef.current.lastDirection && triggerShift(stateRef.current.lastDirection, stateRef.current.maxDist)}
                 disabled={isAnalyzing}
-                className="px-4 py-1.5 bg-fuchsia-900/40 hover:bg-fuchsia-800 border border-fuchsia-500/30 text-[10px] tracking-widest disabled:opacity-50"
+                className="px-2 sm:px-4 py-1 sm:py-1.5 bg-fuchsia-900/40 hover:bg-fuchsia-800 border border-fuchsia-500/30 text-[8px] sm:text-[10px] tracking-widest disabled:opacity-50 whitespace-nowrap"
               >
-                {isAnalyzing ? "ANALYZING..." : "AI INSIGHT"}
+                {isAnalyzing ? "..." : (window.innerWidth < 640 ? "INSIGHT" : "AI INSIGHT")}
               </button>
-              <button onClick={() => setIsPlaying(!isPlaying)} className="px-4 py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-xs">
+              <button onClick={() => setIsPlaying(!isPlaying)} className="px-3 sm:px-4 py-1 sm:py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-[10px] sm:text-xs">
                   {isPlaying ? "STOP" : "PLAY"}
               </button>
           </div>
       </div>
       
       {/* DAW Main Workspace */}
-      <div className="absolute top-20 left-4 bottom-28 right-4 z-40 flex gap-4 pointer-events-none">
-          <div className="w-64 bg-black/60 backdrop-blur-md border border-white/10 p-4 pointer-events-auto">
-              <h2 className="text-xs uppercase tracking-widest text-slate-500 mb-4">Tracks</h2>
+      <div className="absolute top-14 sm:top-20 left-2 sm:left-4 bottom-32 sm:bottom-28 right-2 sm:right-4 z-40 flex flex-col sm:flex-row gap-2 sm:gap-4 pointer-events-none">
+          <div className="h-1/4 sm:h-auto sm:w-64 bg-black/60 backdrop-blur-md border border-white/10 p-3 sm:p-4 pointer-events-auto overflow-hidden">
+              <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-cyan-500/50 mb-2 sm:mb-4 font-bold italic">Sector Data</h2>
+              <div className="space-y-2">
+                  <div className={`p-2 border ${stateRef.current.lastDirection === 'North' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400">Trinity Node</div>
+                  </div>
+                  <div className={`p-2 border ${stateRef.current.lastDirection === 'East' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400">TravGuild Hub</div>
+                  </div>
+                  <div className={`p-2 border ${stateRef.current.lastDirection === 'South' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400">HENS Ground</div>
+                  </div>
+                  <div className={`p-2 border ${stateRef.current.lastDirection === 'West' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400">Observer Logs</div>
+                  </div>
+              </div>
           </div>
-          <div className="flex-1 bg-black/60 backdrop-blur-md border border-white/10 p-4 pointer-events-auto">
-              <h2 className="text-xs uppercase tracking-widest text-slate-500 mb-4">Sequencer</h2>
+          <div className="flex-1 bg-black/60 backdrop-blur-md border border-white/10 p-3 sm:p-4 pointer-events-auto overflow-hidden relative">
+              <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-slate-500 mb-2 sm:mb-4">Resonance Timeline</h2>
+              <div className="w-full h-full border border-dashed border-white/5 flex items-center justify-center">
+                 <div className="w-full h-1 bg-white/5 absolute top-1/2 -translate-y-1/2" />
+                 <div className="w-1 h-full bg-white/5 absolute left-1/2 -translate-x-1/2" />
+                 <div className="text-[9px] text-slate-700 italic">Sovereign Field Active</div>
+              </div>
           </div>
       </div>
       
       {/* DAW Mixer */}
-      <div className="absolute bottom-4 left-4 right-4 h-20 z-40 bg-black/60 backdrop-blur-md border border-white/10 p-3 pointer-events-auto">
-           <h2 className="text-xs uppercase tracking-widest text-slate-500 mb-2">Mixer</h2>
-           {/* Mixer Channels */}
+      <div className="absolute bottom-16 sm:bottom-4 left-2 sm:left-4 right-2 sm:right-4 h-14 sm:h-20 z-40 bg-black/60 backdrop-blur-md border border-white/10 p-2 sm:p-3 pointer-events-auto">
+           <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-slate-500 mb-1 sm:mb-2">Mixer</h2>
+           <div className="flex gap-2">
+             <div className="h-8 sm:h-10 w-8 bg-white/5 border border-white/10 flex items-center justify-center text-[8px] text-slate-500">M1</div>
+             <div className="h-8 sm:h-10 w-8 bg-white/5 border border-white/10 flex items-center justify-center text-[8px] text-slate-500">M2</div>
+           </div>
       </div>
 
       {/* Primary Metrics HUD */}
@@ -903,15 +950,15 @@ export default function App() {
           y: stateRef.current.isDragging && stateRef.current.y < 200 ? -20 : 0,
           opacity: stateRef.current.isDragging && stateRef.current.y < 200 ? 0.3 : 1
         }}
-        className="absolute top-10 left-1/2 -translate-x-1/2 flex items-center gap-12 z-20 w-full justify-center px-6 pointer-events-none"
+        className="absolute top-16 sm:top-10 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 sm:gap-12 z-20 w-fit justify-center px-4 sm:px-6 pointer-events-none"
       >
         {/* Tension Panel */}
-        <div className="flex flex-col items-center w-48">
-          <span className="text-[10px] tracking-[0.3em] text-slate-500 mb-2 uppercase">Input Tension</span>
-          <div className="text-5xl font-light tracking-tighter tabular-nums">
+        <div className="flex flex-col items-center w-24 sm:w-48">
+          <span className="text-[8px] sm:text-[10px] tracking-[0.1em] sm:tracking-[0.3em] text-slate-500 mb-1 sm:mb-2 uppercase">Input</span>
+          <div className="text-xl sm:text-5xl font-light tracking-tighter tabular-nums">
             {metrics.input.toString().padStart(3, '0')}
           </div>
-          <div className="w-full h-1 bg-slate-800 mt-4 overflow-hidden rounded-full">
+          <div className="w-full h-0.5 sm:h-1 bg-slate-800 mt-2 sm:mt-4 overflow-hidden rounded-full">
             <div 
               style={{ width: `${tensionPercent}%` }}
               className="h-full bg-cyan-400 transition-all duration-75 shadow-[0_0_8px_rgba(34,211,238,0.5)]" 
@@ -920,15 +967,15 @@ export default function App() {
         </div>
 
         {/* Divider */}
-        <div className="h-16 w-px bg-slate-800 self-center" />
+        <div className="h-8 sm:h-16 w-px bg-slate-800 self-center" />
 
         {/* Output Panel */}
-        <div className="flex flex-col items-center w-48">
-          <span className="text-[10px] tracking-[0.3em] text-slate-500 mb-2 uppercase">Output Kinetic</span>
-          <div className="text-5xl font-light tracking-tighter text-fuchsia-500 tabular-nums">
+        <div className="flex flex-col items-center w-24 sm:w-48">
+          <span className="text-[8px] sm:text-[10px] tracking-[0.1em] sm:tracking-[0.3em] text-slate-500 mb-1 sm:mb-2 uppercase">Output</span>
+          <div className="text-xl sm:text-5xl font-light tracking-tighter text-fuchsia-500 tabular-nums">
             {metrics.output.toString().padStart(3, '0')}
           </div>
-          <div className="w-full h-1 bg-slate-800 mt-4 overflow-hidden rounded-full">
+          <div className="w-full h-0.5 sm:h-1 bg-slate-800 mt-2 sm:mt-4 overflow-hidden rounded-full">
             <div 
               style={{ width: `${forcePercent}%` }}
               className="h-full bg-fuchsia-500 transition-all duration-75 shadow-[0_0_8px_rgba(217,70,239,0.5)]" 
@@ -938,10 +985,10 @@ export default function App() {
       </motion.div>
 
       {/* Footer Right (Adaptive Status) */}
-      <div className="absolute bottom-10 right-10 text-right text-[10px] text-slate-600 tracking-widest uppercase pointer-events-none flex flex-col gap-1">
-        <div className="text-cyan-400 font-mono mb-2">{stateRef.current.bpm} BPM // AUTO-TEMPO</div>
-        <div>Vector Balance Engine v1.0.8</div>
-        <div className="text-slate-400/50">Status: {stateRef.current.isDragging ? 'Dragging' : 'Equilibrium'}</div>
+      <div className="absolute bottom-2 sm:bottom-10 right-2 sm:right-10 text-right text-[8px] sm:text-[10px] text-slate-600 tracking-widest uppercase pointer-events-none flex flex-col gap-0.5 sm:gap-1">
+        <div className="text-cyan-400 font-mono mb-1">{stateRef.current.bpm} BPM</div>
+        <div className="hidden sm:block">Vector Balance Engine v1.0.8</div>
+        <div className="text-slate-400/50">Status: {stateRef.current.isDragging ? 'DRAG' : 'IDLE'}</div>
       </div>
     </div>
   );
