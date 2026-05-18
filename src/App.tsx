@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Target, Zap } from 'lucide-react';
+import Channel1Canvas from './components/Channel1Canvas';
 
 interface Particle {
   id: number;
@@ -95,6 +96,8 @@ export default function App() {
     lastOutput: 0,
     shiftTriggered: false,
     lastDirection: "" as "North" | "South" | "East" | "West" | "",
+    resonance: 0,
+    lastD: 0,
   });
 
   const [motionActive, setMotionActive] = useState(false);
@@ -102,6 +105,8 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [resonanceState, setResonanceState] = useState(0);
+  const [logs, setLogs] = useState<string[]>([]);
 
   const triggerShift = async (direction: string, magnitude: number) => {
     if (isAnalyzing) return;
@@ -113,10 +118,13 @@ export default function App() {
         body: JSON.stringify({
           direction,
           magnitude,
-          resonance: 0.7 + Math.random() * 0.3 // Mocking resonance for now
+          resonance: stateRef.current.resonance
         })
       });
       const data = await response.json();
+      if (data.status === "Shift confirmed") {
+         setLogs(prev => [data.insight, ...prev].slice(0, 10));
+      }
       if (data.insight) {
         setAnalysis(data.insight);
         setTimeout(() => setAnalysis(null), 10000);
@@ -416,8 +424,17 @@ export default function App() {
 
       if (!state.isDragging) {
         state.idleTime += 16; // Approx 60fps increment
+        state.resonance *= 0.95;
       } else {
         state.idleTime = 0;
+        const d = Math.hypot(state.x - state.cx, state.y - state.cy);
+        const stability = 1 - Math.min(1, Math.abs(d - state.lastD) / 5);
+        state.resonance = Math.min(1, state.resonance + (stability * 0.02));
+        state.lastD = d;
+      }
+
+      if (Math.abs(state.resonance - resonanceState) > 0.05) {
+        setResonanceState(state.resonance);
       }
 
       // 1. Clear & Draw Background Grid
@@ -869,6 +886,13 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 bg-[#0A0A0F] text-white font-mono overflow-hidden select-none touch-none">
+      <Channel1Canvas 
+        magnitude={metrics.input} 
+        resonance={resonanceState} 
+        dragX={stateRef.current.x} 
+        dragY={stateRef.current.y} 
+        isDragging={stateRef.current.isDragging} 
+      />
       <canvas
         ref={canvasRef}
         className="absolute inset-0 cursor-crosshair z-0"
@@ -922,15 +946,34 @@ export default function App() {
                   </div>
                   <div className={`p-2 border ${stateRef.current.lastDirection === 'West' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
                     <div className="text-[9px] uppercase text-cyan-400">Observer Logs</div>
+                    {stateRef.current.lastDirection === 'West' && logs.length > 0 && (
+                      <div className="mt-2 space-y-1 max-h-24 overflow-y-auto pr-1">
+                        {logs.map((log, i) => (
+                           <div key={i} className="text-[8px] text-slate-400 font-mono border-l border-white/20 pl-2">
+                             {log}
+                           </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
               </div>
           </div>
           <div className="flex-1 bg-black/60 backdrop-blur-md border border-white/10 p-3 sm:p-4 pointer-events-auto overflow-hidden relative">
               <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-slate-500 mb-2 sm:mb-4">Resonance Timeline</h2>
-              <div className="w-full h-full border border-dashed border-white/5 flex items-center justify-center">
+              <div className="w-full h-full border border-dashed border-white/5 flex flex-col items-center justify-center relative">
                  <div className="w-full h-1 bg-white/5 absolute top-1/2 -translate-y-1/2" />
                  <div className="w-1 h-full bg-white/5 absolute left-1/2 -translate-x-1/2" />
-                 <div className="text-[9px] text-slate-700 italic">Sovereign Field Active</div>
+                 
+                 <div className="flex gap-1 mb-4 z-10">
+                   {Array.from({ length: 12 }).map((_, i) => (
+                     <div 
+                       key={i} 
+                       className={`w-1 h-8 rounded-full transition-all duration-300 ${resonanceState > (i / 12) ? 'bg-cyan-500 shadow-[0_0_10px_rgba(34,211,238,0.5)]' : 'bg-white/5'}`} 
+                     />
+                   ))}
+                 </div>
+                 
+                 <div className="text-[9px] text-slate-700 italic z-10">SYNC STATUS: {Math.round(resonanceState * 100)}%</div>
               </div>
           </div>
       </div>
