@@ -26,13 +26,21 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
     let animationFrameId: number;
     let time = 0;
 
-    const resize = () => {
+    const parent = canvas.parentElement;
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        canvas.width = width;
+        canvas.height = height;
+      }
+    });
+
+    if (parent) {
+      resizeObserver.observe(parent);
+    } else {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-    };
-
-    window.addEventListener('resize', resize);
-    resize();
+    }
 
     const render = () => {
       time += 0.05;
@@ -124,7 +132,7 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
     render();
 
     return () => {
-      window.removeEventListener('resize', resize);
+      resizeObserver.disconnect();
       cancelAnimationFrame(animationFrameId);
     };
   }, [dragX, dragY, isDragging, magnitude, resonance]);

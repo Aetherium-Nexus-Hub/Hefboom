@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Target, Zap } from 'lucide-react';
+import { Target, Zap, Play, Square, Volume2, VolumeX, Sliders, Music, Radio, Activity, Sparkles } from 'lucide-react';
 import Channel1Canvas from './components/Channel1Canvas';
 
 interface Particle {
@@ -30,10 +30,22 @@ interface SavedLoop {
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sandboxContainerRef = useRef<HTMLDivElement>(null);
   const [metrics, setMetrics] = useState({ input: 0, output: 0 });
   const [isInteractionActive, setIsInteractionActive] = useState(false);
   const [savedLoops, setSavedLoops] = useState<SavedLoop[]>([]);
   const savedLoopsRef = useRef<SavedLoop[]>([]);
+
+  const [synthSettings, setSynthSettings] = useState({
+    masterVolume: 0.5,
+    droneVolume: 0.12,
+    pluckVolume: 0.3,
+    dronePitch: 110,
+    pluckWaveform: 'triangle' as OscillatorType,
+    droneWaveform: 'sawtooth' as OscillatorType,
+    delayTime: 0.25,
+    delayFeedbackVal: 0.4,
+  });
 
   useEffect(() => {
     savedLoopsRef.current = savedLoops;
@@ -98,6 +110,15 @@ export default function App() {
     lastDirection: "" as "North" | "South" | "East" | "West" | "",
     resonance: 0,
     lastD: 0,
+    // Audio Synth Settings
+    masterVolume: 0.5,
+    droneVolume: 0.12,
+    pluckVolume: 0.3,
+    dronePitch: 110,
+    pluckWaveform: 'triangle' as OscillatorType,
+    droneWaveform: 'sawtooth' as OscillatorType,
+    delayTime: 0.25,
+    delayFeedbackVal: 0.4,
   });
 
   const [motionActive, setMotionActive] = useState(false);
@@ -164,26 +185,40 @@ export default function App() {
 
   // Audio Synthesis Utilities
   const initAudio = () => {
-    if (stateRef.current.audioCtx) return;
+    if (stateRef.current.audioCtx) {
+      if (stateRef.current.audioCtx.state === 'suspended') {
+        stateRef.current.audioCtx.resume();
+        setAudioEnabled(true);
+      }
+      return;
+    }
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     stateRef.current.audioCtx = ctx;
 
+    // Create Master Gain
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(stateRef.current.masterVolume, ctx.currentTime);
+    masterGain.connect(ctx.destination);
+    (window as any).masterGainNode = masterGain;
+
     // Setup Delay Effect for Plucks
     const delay = ctx.createDelay(1.0);
-    delay.delayTime.value = 0.25; // Quarter note-ish
+    delay.delayTime.value = stateRef.current.delayTime;
     
     // Create filter for delay effect
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 1000; // Default frequency
+    filter.frequency.value = 1200; // Default frequency
 
     const feedback = ctx.createGain();
-    feedback.gain.value = 0.4; // Feedback amount
+    feedback.gain.value = stateRef.current.delayFeedbackVal;
 
     delay.connect(filter);
     filter.connect(feedback);
     feedback.connect(delay);
-    filter.connect(ctx.destination);
+    
+    // Connect feedback loop output to master gain
+    filter.connect(masterGain);
 
     stateRef.current.delayNode = delay;
     stateRef.current.delayFeedback = feedback;
@@ -191,8 +226,8 @@ export default function App() {
     
     // Add Analyser for visualization
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
-    delay.connect(analyser); // Connect from delay to visualize effect mix
+    analyser.fftSize = 128; // Smaller fftSize is perfect for a small rack visualizer
+    masterGain.connect(analyser);
     (window as any).audioAnalyser = analyser;
 
     setAudioEnabled(true);
@@ -206,7 +241,7 @@ export default function App() {
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
 
-    osc.type = 'triangle';
+    osc.type = stateRef.current.pluckWaveform;
     osc.frequency.setValueAtTime(freq, ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(freq * 0.5, ctx.currentTime + 0.2);
 
@@ -214,12 +249,19 @@ export default function App() {
     filter.frequency.setValueAtTime(2000, ctx.currentTime);
     filter.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.2);
 
-    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    const pluckVol = stateRef.current.pluckVolume * stateRef.current.masterVolume;
+    gain.gain.setValueAtTime(pluckVol, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+
+    const masterGain = (window as any).masterGainNode;
+    if (masterGain) {
+      gain.connect(masterGain);
+    } else {
+      gain.connect(ctx.destination);
+    }
 
     // Connect to delay line
     if (stateRef.current.delayNode) {
@@ -249,12 +291,19 @@ export default function App() {
     filter.frequency.value = 1000;
 
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    const snapVol = 0.2 * stateRef.current.masterVolume;
+    gain.gain.setValueAtTime(snapVol, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+
+    const masterGain = (window as any).masterGainNode;
+    if (masterGain) {
+      gain.connect(masterGain);
+    } else {
+      gain.connect(ctx.destination);
+    }
 
     noise.start();
     noise.stop(ctx.currentTime + 0.1);
@@ -268,14 +317,21 @@ export default function App() {
     const gain = ctx.createGain();
     
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime); // High pitch A
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
 
+    const chimeVol = 0.2 * stateRef.current.masterVolume;
     gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+    gain.gain.linearRampToValueAtTime(chimeVol, ctx.currentTime + 0.05);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.0);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+
+    const masterGain = (window as any).masterGainNode;
+    if (masterGain) {
+      gain.connect(masterGain);
+    } else {
+      gain.connect(ctx.destination);
+    }
 
     osc.start();
     osc.stop(ctx.currentTime + 1.0);
@@ -289,18 +345,25 @@ export default function App() {
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
 
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(110, ctx.currentTime);
+    osc.type = stateRef.current.droneWaveform;
+    osc.frequency.setValueAtTime(stateRef.current.dronePitch, ctx.currentTime);
 
     filter.type = 'lowpass';
     filter.frequency.setValueAtTime(400, ctx.currentTime);
 
+    const droneVol = stateRef.current.droneVolume * stateRef.current.masterVolume;
     gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.1);
+    gain.gain.linearRampToValueAtTime(droneVol, ctx.currentTime + 0.1);
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+
+    const masterGain = (window as any).masterGainNode;
+    if (masterGain) {
+      gain.connect(masterGain);
+    } else {
+      gain.connect(ctx.destination);
+    }
 
     osc.start();
     stateRef.current.droneOsc = osc;
@@ -308,11 +371,11 @@ export default function App() {
   };
 
   const updateDrone = (dist: number) => {
-    const { droneOsc, droneGain, audioCtx } = stateRef.current;
+    const { droneOsc, droneGain, audioCtx, dronePitch, droneVolume, masterVolume } = stateRef.current;
     if (!droneOsc || !droneGain || !audioCtx) return;
 
-    const freq = 110 + (dist * 0.5);
-    const volume = Math.min(0.2, (dist / 300) * 0.2);
+    const freq = dronePitch + (dist * 0.5);
+    const volume = Math.min(droneVolume * 2, (dist / 300) * droneVolume) * masterVolume;
     
     droneOsc.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.05);
     droneGain.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
@@ -330,6 +393,131 @@ export default function App() {
     stateRef.current.droneGain = null;
   };
 
+  const handleSynthChange = (key: string, val: any) => {
+    (stateRef.current as any)[key] = val;
+    setSynthSettings(prev => ({ ...prev, [key]: val }));
+
+    const ctx = stateRef.current.audioCtx;
+    if (ctx && ctx.state === 'running') {
+      if (key === 'delayFeedbackVal' && stateRef.current.delayFeedback) {
+        stateRef.current.delayFeedback.gain.setTargetAtTime(val as number, ctx.currentTime, 0.05);
+      }
+      if (key === 'delayTime' && stateRef.current.delayNode) {
+        stateRef.current.delayNode.delayTime.setTargetAtTime(val as number, ctx.currentTime, 0.05);
+      }
+      if (key === 'dronePitch' && stateRef.current.droneOsc) {
+        stateRef.current.droneOsc.frequency.setTargetAtTime(val as number, ctx.currentTime, 0.05);
+      }
+      if (key === 'droneWaveform' && stateRef.current.droneOsc) {
+        stateRef.current.droneOsc.type = val as OscillatorType;
+      }
+      if (key === 'droneVolume' && stateRef.current.droneGain) {
+        stateRef.current.droneGain.gain.setTargetAtTime((val as number) * stateRef.current.masterVolume, ctx.currentTime, 0.05);
+      }
+      if (key === 'masterVolume') {
+        const masterGain = (window as any).masterGainNode;
+        if (masterGain) {
+          masterGain.gain.setTargetAtTime(val as number, ctx.currentTime, 0.05);
+        }
+        if (stateRef.current.droneGain) {
+          stateRef.current.droneGain.gain.setTargetAtTime(stateRef.current.droneVolume * (val as number), ctx.currentTime, 0.05);
+        }
+      }
+    }
+  };
+
+  const applyPreset = (presetName: string) => {
+    const state = stateRef.current;
+    let preset = {
+      masterVolume: 0.5,
+      droneVolume: 0.12,
+      pluckVolume: 0.3,
+      dronePitch: 110,
+      pluckWaveform: 'triangle' as OscillatorType,
+      droneWaveform: 'sawtooth' as OscillatorType,
+      delayTime: 0.25,
+      delayFeedbackVal: 0.4,
+    };
+
+    if (presetName === 'Ethereal Space-Time') {
+      preset = {
+        masterVolume: 0.6,
+        droneVolume: 0.08,
+        pluckVolume: 0.45,
+        dronePitch: 220,
+        pluckWaveform: 'triangle',
+        droneWaveform: 'sine',
+        delayTime: 0.45,
+        delayFeedbackVal: 0.65,
+      };
+    } else if (presetName === 'Heavy Grav-Drive') {
+      preset = {
+        masterVolume: 0.75,
+        droneVolume: 0.16,
+        pluckVolume: 0.35,
+        dronePitch: 55,
+        pluckWaveform: 'square',
+        droneWaveform: 'sawtooth',
+        delayTime: 0.2,
+        delayFeedbackVal: 0.3,
+      };
+    } else if (presetName === 'Retro Spark') {
+      preset = {
+        masterVolume: 0.6,
+        droneVolume: 0.1,
+        pluckVolume: 0.5,
+        dronePitch: 110,
+        pluckWaveform: 'sawtooth',
+        droneWaveform: 'square',
+        delayTime: 0.15,
+        delayFeedbackVal: 0.5,
+      };
+    } else if (presetName === 'Deep Contemplation') {
+      preset = {
+        masterVolume: 0.5,
+        droneVolume: 0.12,
+        pluckVolume: 0.25,
+        dronePitch: 147,
+        pluckWaveform: 'sine',
+        droneWaveform: 'triangle',
+        delayTime: 0.6,
+        delayFeedbackVal: 0.15,
+      };
+    }
+
+    state.masterVolume = preset.masterVolume;
+    state.droneVolume = preset.droneVolume;
+    state.pluckVolume = preset.pluckVolume;
+    state.dronePitch = preset.dronePitch;
+    state.pluckWaveform = preset.pluckWaveform;
+    state.droneWaveform = preset.droneWaveform;
+    state.delayTime = preset.delayTime;
+    state.delayFeedbackVal = preset.delayFeedbackVal;
+
+    const ctx = state.audioCtx;
+    if (ctx && ctx.state === 'running') {
+      const masterGain = (window as any).masterGainNode;
+      if (masterGain) {
+        masterGain.gain.setTargetAtTime(preset.masterVolume, ctx.currentTime, 0.1);
+      }
+      if (state.delayFeedback) {
+        state.delayFeedback.gain.setTargetAtTime(preset.delayFeedbackVal, ctx.currentTime, 0.1);
+      }
+      if (state.delayNode) {
+        state.delayNode.delayTime.setTargetAtTime(preset.delayTime, ctx.currentTime, 0.1);
+      }
+      if (state.droneOsc) {
+        state.droneOsc.type = preset.droneWaveform;
+        state.droneOsc.frequency.setTargetAtTime(preset.dronePitch, ctx.currentTime, 0.1);
+      }
+      if (state.droneGain) {
+        state.droneGain.gain.setTargetAtTime(preset.droneVolume * preset.masterVolume, ctx.currentTime, 0.1);
+      }
+    }
+
+    setSynthSettings(preset);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -338,15 +526,18 @@ export default function App() {
     if (!ctx) return;
 
     const handleResize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
+      const container = sandboxContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
       canvas.width = w;
       canvas.height = h;
       const state = stateRef.current;
       state.cx = w / 2;
       state.cy = h / 2;
       
-      // Update corner anchors
+      // Update corner anchors relative to this canvas block
       state.anchors = [
         { x: 40, y: 40 },           // Top Left
         { x: w - 40, y: 40 },      // Top Right
@@ -355,13 +546,19 @@ export default function App() {
       ];
       state.startPos = [...state.anchors];
 
-      if (state.x === 0) {
+      if (state.x === 0 || !state.isDragging) {
         state.x = state.cx;
         state.y = state.cy;
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    const container = sandboxContainerRef.current;
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    if (container) {
+      resizeObserver.observe(container);
+    }
     handleResize();
 
     const animate = (time: number) => {
@@ -681,10 +878,64 @@ export default function App() {
       });
       ctx.restore();
 
+      // Draw Mini Oscilloscope Canvas
+      const oscCanvas = document.getElementById('synthOscilloscope') as HTMLCanvasElement | null;
+      if (oscCanvas && audioEnabled && (window as any).audioAnalyser) {
+        const oCtx = oscCanvas.getContext('2d');
+        if (oCtx) {
+          const analyser = (window as any).audioAnalyser as AnalyserNode;
+          const bufferLength = analyser.fftSize;
+          const dataArray = new Uint8Array(bufferLength);
+          analyser.getByteTimeDomainData(dataArray);
+
+          oCtx.fillStyle = 'rgba(10, 10, 15, 0.4)'; // Motion blur trail
+          oCtx.fillRect(0, 0, oscCanvas.width, oscCanvas.height);
+
+          oCtx.lineWidth = 1.5;
+          oCtx.strokeStyle = 'rgba(236, 72, 153, 0.95)'; // Fuchsia-ish
+          oCtx.beginPath();
+
+          const sliceWidth = oscCanvas.width / bufferLength;
+          let xX = 0;
+
+          for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const yOffset = (v * oscCanvas.height) / 2;
+
+            if (i === 0) {
+              oCtx.moveTo(xX, yOffset);
+            } else {
+              oCtx.lineTo(xX, yOffset);
+            }
+
+            xX += sliceWidth;
+          }
+
+          oCtx.lineTo(oscCanvas.width, oscCanvas.height / 2);
+          oCtx.stroke();
+        }
+      } else if (oscCanvas) {
+        const oCtx = oscCanvas.getContext('2d');
+        if (oCtx) {
+          oCtx.fillStyle = '#111015';
+          oCtx.fillRect(0, 0, oscCanvas.width, oscCanvas.height);
+          oCtx.strokeStyle = 'rgba(34, 211, 238, 0.15)'; // Flatline cyan
+          oCtx.lineWidth = 1;
+          oCtx.beginPath();
+          oCtx.moveTo(0, oscCanvas.height / 2);
+          oCtx.lineTo(oscCanvas.width, oscCanvas.height / 2);
+          oCtx.stroke();
+        }
+      }
+
       requestAnimationFrame(animate);
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      const container = sandboxContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+
       const state = stateRef.current;
       state.idleTime = 0;
       state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -693,8 +944,13 @@ export default function App() {
       state.releaseDelay = 0;
 
       const pts = Array.from(state.pointers.values()) as { x: number; y: number }[];
-      const avgX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
-      const avgY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+      const localPts = pts.map(p => ({
+        x: p.x - rect.left,
+        y: p.y - rect.top
+      }));
+
+      const avgX = localPts.reduce((sum, p) => sum + p.x, 0) / localPts.length;
+      const avgY = localPts.reduce((sum, p) => sum + p.y, 0) / localPts.length;
 
       // Make ball appear at input
       if (!state.isDragging) {
@@ -732,10 +988,19 @@ export default function App() {
       if (!state.pointers.has(e.pointerId)) return;
       state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+      const container = sandboxContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+
       if (state.isDragging) {
         const pts = Array.from(state.pointers.values()) as { x: number; y: number }[];
-        const avgX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
-        const avgY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+        const localPts = pts.map(p => ({
+          x: p.x - rect.left,
+          y: p.y - rect.top
+        }));
+
+        const avgX = localPts.reduce((sum, p) => sum + p.x, 0) / localPts.length;
+        const avgY = localPts.reduce((sum, p) => sum + p.y, 0) / localPts.length;
 
         state.x = avgX;
         state.y = avgY;
@@ -780,9 +1045,10 @@ export default function App() {
     const handlePointerUp = (e: PointerEvent) => {
       const state = stateRef.current;
       const wasDragging = state.isDragging;
-      const pt = state.pointers.get(e.pointerId);
-
       state.pointers.delete(e.pointerId);
+
+      const container = sandboxContainerRef.current;
+      if (!container) return;
 
       if (state.pointers.size === 0 && wasDragging) {
         state.isDragging = false;
@@ -867,14 +1133,18 @@ export default function App() {
 
     const animationId = requestAnimationFrame(animate);
 
-    window.addEventListener('pointerdown', handlePointerDown);
+    if (container) {
+      container.addEventListener('pointerdown', handlePointerDown);
+    }
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
 
     return () => {
       cancelAnimationFrame(animationId);
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('pointerdown', handlePointerDown);
+      resizeObserver.disconnect();
+      if (container) {
+        container.removeEventListener('pointerdown', handlePointerDown);
+      }
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('deviceorientation', handleOrientation);
@@ -885,23 +1155,11 @@ export default function App() {
   const forcePercent = Math.min(100, (metrics.output / 300) * 100);
 
   return (
-    <div className="fixed inset-0 bg-[#0A0A0F] text-white font-mono overflow-hidden select-none touch-none">
-      <Channel1Canvas 
-        magnitude={metrics.input} 
-        resonance={resonanceState} 
-        dragX={stateRef.current.x} 
-        dragY={stateRef.current.y} 
-        isDragging={stateRef.current.isDragging} 
-      />
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 cursor-crosshair z-0"
-      />
-
+    <div className="fixed inset-0 bg-[#050508] text-white font-mono flex flex-col overflow-hidden select-none">
       {/* DAW Header/Transport */}
-      <div className="absolute top-0 sm:top-4 left-0 sm:left-4 right-0 sm:right-4 z-50 p-2 sm:p-3 bg-black/60 backdrop-blur-md border-b sm:border border-cyan-500/20 flex justify-between items-center pointer-events-auto">
+      <div className="w-full z-50 p-3 bg-black/60 backdrop-blur-md border-b border-cyan-500/15 flex justify-between items-center pointer-events-auto shrink-0">
           <div className="flex items-center gap-2 sm:gap-3">
-            <h1 className="text-[10px] sm:text-sm font-bold tracking-widest truncate max-w-[80px] sm:max-w-none text-cyan-400">HEFBOOM AETHERIUM</h1>
+            <h1 className="text-xs sm:text-sm font-bold tracking-widest text-cyan-400">HEFBOOM AETHERIUM</h1>
             {analysis && (
               <motion.div 
                 initial={{ opacity: 0, x: -10 }}
@@ -914,124 +1172,381 @@ export default function App() {
             )}
           </div>
           <div className="flex gap-1.5 sm:gap-2">
-              <div className="flex items-center px-3 bg-white/5 border border-white/10 text-[8px] sm:text-[10px] tracking-widest text-slate-400 hidden sm:flex">
+              <div className="flex items-center px-3 bg-white/5 border border-white/10 text-[8px] sm:text-[10px] tracking-widest text-slate-400">
                 {stateRef.current.lastDirection || "IDLE"}
               </div>
               <button 
                 onClick={() => stateRef.current.lastDirection && triggerShift(stateRef.current.lastDirection, stateRef.current.maxDist)}
                 disabled={isAnalyzing}
-                className="px-2 sm:px-4 py-1 sm:py-1.5 bg-fuchsia-900/40 hover:bg-fuchsia-800 border border-fuchsia-500/30 text-[8px] sm:text-[10px] tracking-widest disabled:opacity-50 whitespace-nowrap"
+                className="px-2 sm:px-4 py-1 sm:py-1.5 bg-fuchsia-900/40 hover:bg-fuchsia-800 border border-fuchsia-500/30 text-[8px] sm:text-[10px] tracking-widest disabled:opacity-50 whitespace-nowrap font-bold"
               >
                 {isAnalyzing ? "..." : (window.innerWidth < 640 ? "INSIGHT" : "AI INSIGHT")}
               </button>
-              <button onClick={() => setIsPlaying(!isPlaying)} className="px-3 sm:px-4 py-1 sm:py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-[10px] sm:text-xs">
+              <button onClick={() => setIsPlaying(!isPlaying)} className="px-3 sm:px-4 py-1 sm:py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-[10px] sm:text-xs font-bold">
                   {isPlaying ? "STOP" : "PLAY"}
               </button>
           </div>
       </div>
-      
-      {/* DAW Main Workspace */}
-      <div className="absolute top-14 sm:top-20 left-2 sm:left-4 bottom-32 sm:bottom-28 right-2 sm:right-4 z-40 flex flex-col sm:flex-row gap-2 sm:gap-4 pointer-events-none">
-          <div className="h-1/4 sm:h-auto sm:w-64 bg-black/60 backdrop-blur-md border border-white/10 p-3 sm:p-4 pointer-events-auto overflow-hidden">
-              <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-cyan-500/50 mb-2 sm:mb-4 font-bold italic">Sector Data</h2>
-              <div className="space-y-2">
-                  <div className={`p-2 border ${stateRef.current.lastDirection === 'North' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
-                    <div className="text-[9px] uppercase text-cyan-400">Trinity Node</div>
+
+      {/* Main Split Layout */}
+      <div className="flex-1 flex flex-col md:flex-row gap-4 px-4 pb-4 overflow-hidden relative">
+        {/* Left Section: SANDBOX STAGE */}
+        <div 
+          ref={sandboxContainerRef}
+          className="flex-1 min-h-[280px] md:h-full bg-[#09090E] border border-cyan-500/15 rounded-xl relative overflow-hidden cursor-crosshair touch-none select-none shadow-[inset_0_0_40px_rgba(34,211,238,0.03)]"
+        >
+          <Channel1Canvas 
+            magnitude={metrics.input} 
+            resonance={resonanceState} 
+            dragX={stateRef.current.x} 
+            dragY={stateRef.current.y} 
+            isDragging={stateRef.current.isDragging} 
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 z-0"
+          />
+
+          {/* Canvas Floating Labels */}
+          <div className="absolute top-3 left-3 px-2 py-1 bg-black/60 border border-cyan-500/10 rounded text-[9px] tracking-widest text-cyan-400 font-bold uppercase pointer-events-none z-10 flex items-center gap-1.5 shadow-md">
+            <Sparkles className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
+            <span>AETHER STAGE</span>
+          </div>
+
+          <div className="absolute top-3 right-3 px-2 py-1 bg-black/60 border border-white/5 rounded text-[8px] sm:text-[9px] tracking-widest text-slate-500 font-bold uppercase pointer-events-none z-10 shadow-md">
+            {stateRef.current.isDragging ? 'ACTIVE SHIFT' : 'STABILIZED'}
+          </div>
+
+          {/* Floating BPM/Status Indicator in low right corner of sandbox */}
+          <div className="absolute bottom-3 right-3 text-right text-[9px] tracking-widest uppercase pointer-events-none z-10 flex flex-col gap-0.5 bg-black/50 p-2 border border-white/5 rounded">
+            <div className="text-cyan-400 font-bold">{stateRef.current.bpm} BPM</div>
+            <div className="text-slate-500">Status: {stateRef.current.isDragging ? 'DRAGGING' : 'IDLE'}</div>
+          </div>
+        </div>
+
+        {/* Right Section: DAW CONTROL DECKS */}
+        <div className="w-full md:w-[440px] shrink-0 h-full flex flex-col gap-4 overflow-y-auto pr-1">
+          
+          {/* Deck Block 1: Metrics HUD */}
+          <div className="bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 rounded-xl">
+            <h2 className="text-[9px] uppercase tracking-widest text-slate-500 font-bold mb-3 font-mono">Tension Metrics HUD</h2>
+            <div className="flex flex-row items-center gap-8 justify-center">
+              {/* Tension Gauge */}
+              <div className="flex flex-col items-center flex-1">
+                <span className="text-[8px] sm:text-[9px] tracking-widest text-slate-500 mb-1 uppercase">Input Tension</span>
+                <div className="text-xl sm:text-3xl font-light tracking-tighter tabular-nums">
+                  {metrics.input.toString().padStart(3, '0')}
+                </div>
+                <div className="w-full h-1 bg-stone-900 mt-2 overflow-hidden rounded-full border border-stone-800 animate-pulse">
+                  <div 
+                    style={{ width: `${tensionPercent}%` }}
+                    className="h-full bg-cyan-400 transition-all duration-75 shadow-[0_0_8px_rgba(34,211,238,0.5)]" 
+                  />
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="h-10 w-px bg-white/10 self-center" />
+
+              {/* Output Power Gauge */}
+              <div className="flex flex-col items-center flex-1">
+                <span className="text-[8px] sm:text-[9px] tracking-widest text-slate-500 mb-1 uppercase">Output Force</span>
+                <div className="text-xl sm:text-3xl font-light tracking-tighter text-fuchsia-400 tabular-nums">
+                  {metrics.output.toString().padStart(3, '0')}
+                </div>
+                <div className="w-full h-1 bg-stone-900 mt-2 overflow-hidden rounded-full border border-stone-800">
+                  <div 
+                    style={{ width: `${forcePercent}%` }}
+                    className="h-full bg-fuchsia-500 transition-all duration-75 shadow-[0_0_8px_rgba(217,70,239,0.5)]" 
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Deck Block 2: Sector Data & Observer Logs */}
+          <div className="bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 rounded-xl flex flex-col">
+              <h2 className="text-[9px] uppercase tracking-widest text-cyan-500/70 mb-3 font-bold italic">Sector Nodes Status</h2>
+              <div className="grid grid-cols-2 gap-2">
+                  <div className={`p-2 border rounded ${stateRef.current.lastDirection === 'North' ? 'bg-cyan-500/10 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400 font-bold">Trinity Node</div>
+                    <div className="text-[7px] text-slate-500 uppercase mt-0.5">{stateRef.current.lastDirection === 'North' ? 'TRIG' : 'LOCK'}</div>
                   </div>
-                  <div className={`p-2 border ${stateRef.current.lastDirection === 'East' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
-                    <div className="text-[9px] uppercase text-cyan-400">TravGuild Hub</div>
+                  <div className={`p-2 border rounded ${stateRef.current.lastDirection === 'East' ? 'bg-cyan-500/10 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400 font-bold">TravGuild Hub</div>
+                    <div className="text-[7px] text-slate-500 uppercase mt-0.5">{stateRef.current.lastDirection === 'East' ? 'TRIG' : 'LOCK'}</div>
                   </div>
-                  <div className={`p-2 border ${stateRef.current.lastDirection === 'South' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
-                    <div className="text-[9px] uppercase text-cyan-400">HENS Ground</div>
+                  <div className={`p-2 border rounded ${stateRef.current.lastDirection === 'South' ? 'bg-cyan-500/10 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400 font-bold">HENS Ground</div>
+                    <div className="text-[7px] text-slate-500 uppercase mt-0.5">{stateRef.current.lastDirection === 'South' ? 'TRIG' : 'LOCK'}</div>
                   </div>
-                  <div className={`p-2 border ${stateRef.current.lastDirection === 'West' ? 'bg-cyan-500/20 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
-                    <div className="text-[9px] uppercase text-cyan-400">Observer Logs</div>
-                    {stateRef.current.lastDirection === 'West' && logs.length > 0 && (
-                      <div className="mt-2 space-y-1 max-h-24 overflow-y-auto pr-1">
-                        {logs.map((log, i) => (
-                           <div key={i} className="text-[8px] text-slate-400 font-mono border-l border-white/20 pl-2">
-                             {log}
-                           </div>
-                        ))}
-                      </div>
-                    )}
+                  <div className={`p-2 border rounded ${stateRef.current.lastDirection === 'West' ? 'bg-cyan-500/10 border-cyan-500' : 'bg-white/5 border-white/5'} transition-all`}>
+                    <div className="text-[9px] uppercase text-cyan-400 font-bold font-bold">Observer Logs</div>
+                    <div className="text-[7px] text-slate-500 uppercase mt-0.5">{stateRef.current.lastDirection === 'West' ? 'TRIG' : 'LOCK'}</div>
                   </div>
               </div>
+              {logs.length > 0 && (
+                <div className="mt-3 p-2 bg-black/40 border border-white/5 rounded">
+                  <div className="text-[8px] uppercase tracking-wider text-slate-400 mb-1 font-bold font-mono">Quantum Logs:</div>
+                  <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                    {logs.map((log, i) => (
+                       <div key={i} className="text-[8px] text-slate-400 font-mono border-l-2 border-fuchsia-500/30 pl-2">
+                         {log}
+                       </div>
+                    ))}
+                  </div>
+                </div>
+              )}
           </div>
-          <div className="flex-1 bg-black/60 backdrop-blur-md border border-white/10 p-3 sm:p-4 pointer-events-auto overflow-hidden relative">
-              <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-slate-500 mb-2 sm:mb-4">Resonance Timeline</h2>
-              <div className="w-full h-full border border-dashed border-white/5 flex flex-col items-center justify-center relative">
-                 <div className="w-full h-1 bg-white/5 absolute top-1/2 -translate-y-1/2" />
-                 <div className="w-1 h-full bg-white/5 absolute left-1/2 -translate-x-1/2" />
+
+          {/* Deck Block 3: Resonance Sync */}
+          <div className="bg-black/40 backdrop-blur-md border border-white/10 p-3 sm:p-4 rounded-xl">
+              <h2 className="text-[9px] uppercase tracking-widest text-slate-500 font-bold mb-3">Resonance Timeline</h2>
+              <div className="w-full h-24 border border-dashed border-white/5 rounded-lg flex flex-col items-center justify-center relative p-2 bg-[#09090E]">
+                 <div className="w-full h-px bg-white/5 absolute top-1/2 -translate-y-1/2" />
+                 <div className="w-px h-full bg-white/5 absolute left-1/2 -translate-x-1/2" />
                  
-                 <div className="flex gap-1 mb-4 z-10">
+                 <div className="flex gap-1 mb-2.5 z-10">
                    {Array.from({ length: 12 }).map((_, i) => (
                      <div 
                        key={i} 
-                       className={`w-1 h-8 rounded-full transition-all duration-300 ${resonanceState > (i / 12) ? 'bg-cyan-500 shadow-[0_0_10px_rgba(34,211,238,0.5)]' : 'bg-white/5'}`} 
+                       className={`w-1 h-6 rounded-full transition-all duration-300 ${resonanceState > (i / 12) ? 'bg-cyan-500 shadow-[0_0_10px_rgba(34,211,238,0.5)]' : 'bg-white/5'}`} 
                      />
                    ))}
                  </div>
                  
-                 <div className="text-[9px] text-slate-700 italic z-10">SYNC STATUS: {Math.round(resonanceState * 100)}%</div>
+                 <div className="text-[9px] tracking-widest text-cyan-400 font-bold z-10 uppercase">
+                   Sync Status: {Math.round(resonanceState * 100)}%
+                 </div>
               </div>
           </div>
-      </div>
-      
-      {/* DAW Mixer */}
-      <div className="absolute bottom-16 sm:bottom-4 left-2 sm:left-4 right-2 sm:right-4 h-14 sm:h-20 z-40 bg-black/60 backdrop-blur-md border border-white/10 p-2 sm:p-3 pointer-events-auto">
-           <h2 className="text-[8px] sm:text-xs uppercase tracking-widest text-slate-500 mb-1 sm:mb-2">Mixer</h2>
-           <div className="flex gap-2">
-             <div className="h-8 sm:h-10 w-8 bg-white/5 border border-white/10 flex items-center justify-center text-[8px] text-slate-500">M1</div>
-             <div className="h-8 sm:h-10 w-8 bg-white/5 border border-white/10 flex items-center justify-center text-[8px] text-slate-500">M2</div>
-           </div>
-      </div>
 
-      {/* Primary Metrics HUD */}
-      <motion.div 
-        animate={{ 
-          y: stateRef.current.isDragging && stateRef.current.y < 200 ? -20 : 0,
-          opacity: stateRef.current.isDragging && stateRef.current.y < 200 ? 0.3 : 1
-        }}
-        className="absolute top-16 sm:top-10 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 sm:gap-12 z-20 w-fit justify-center px-4 sm:px-6 pointer-events-none"
-      >
-        {/* Tension Panel */}
-        <div className="flex flex-col items-center w-24 sm:w-48">
-          <span className="text-[8px] sm:text-[10px] tracking-[0.1em] sm:tracking-[0.3em] text-slate-500 mb-1 sm:mb-2 uppercase">Input</span>
-          <div className="text-xl sm:text-5xl font-light tracking-tighter tabular-nums">
-            {metrics.input.toString().padStart(3, '0')}
+          {/* Deck Block 4: AETHER RES_SYNTH v1.0 Mixer */}
+          <div className="bg-black/40 backdrop-blur-md border border-cyan-500/15 p-3 sm:p-4 rounded-xl flex flex-col">
+            {!audioEnabled ? (
+              <button 
+                onClick={initAudio}
+                className="w-full h-28 border border-dashed border-cyan-500/35 bg-cyan-950/10 hover:bg-cyan-950/20 active:bg-cyan-950/35 transition-all flex flex-col items-center justify-center cursor-pointer group p-3 rounded-lg"
+              >
+                <div className="flex items-center gap-2 text-cyan-400 font-bold">
+                  <Play className="w-4 h-4 animate-pulse text-cyan-500" />
+                  <span className="text-[10px] tracking-widest font-bold uppercase group-hover:scale-105 transition-transform">
+                    CONNECT AUDIO ENGINE
+                  </span>
+                </div>
+                <div className="text-[8px] text-slate-500 tracking-wider text-center mt-2 leading-relaxed">
+                  UNMUTE RESONANCE PLUCKS, SPACE ECHO DELAYS, AND BASE OSCILLATORS
+                </div>
+              </button>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {/* Header Status bar */}
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-emerald-400 font-bold">SYNTH INTERFACE</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 text-[7px] justify-end">
+                    <button 
+                      onClick={() => applyPreset('Ethereal Space-Time')}
+                      className="px-1 py-0.5 bg-cyan-950/30 hover:bg-cyan-900/50 border border-cyan-500/10 rounded tracking-tighter text-cyan-400 font-semibold"
+                    >
+                      SPACE-TIME
+                    </button>
+                    <button 
+                      onClick={() => applyPreset('Heavy Grav-Drive')}
+                      className="px-1 py-0.5 bg-fuchsia-950/30 hover:bg-fuchsia-900/50 border border-fuchsia-500/10 rounded tracking-tighter text-fuchsia-400 font-semibold"
+                    >
+                      GRAV-DRV
+                    </button>
+                    <button 
+                      onClick={() => applyPreset('Retro Spark')}
+                      className="px-1 py-0.5 bg-amber-950/30 hover:bg-amber-900/50 border border-amber-500/10 rounded tracking-tighter text-amber-400 font-semibold"
+                    >
+                      SPARK
+                    </button>
+                  </div>
+                </div>
+
+                {/* Synth Modules */}
+                <div className="flex flex-col gap-2">
+                  {/* CH1: Base Drone */}
+                  <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded">
+                    <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold mb-1.5">
+                      <span>CH1: BASE DRONE</span>
+                      <Radio className="w-2.5 h-2.5 text-cyan-500" />
+                    </div>
+                    
+                    <div className="flex gap-1 mb-2">
+                      {(['sine', 'triangle', 'sawtooth', 'square'] as OscillatorType[]).map((wave) => (
+                        <button
+                          key={wave}
+                          onClick={() => handleSynthChange('droneWaveform', wave)}
+                          className={`flex-1 text-[7px] py-0.5 rounded border transition-all ${
+                            synthSettings.droneWaveform === wave
+                              ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300 font-bold'
+                              : 'bg-white/5 border-transparent text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {wave.toUpperCase().slice(0, 3)}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="space-y-1.5 text-[8px]">
+                      <div className="flex justify-between text-slate-400">
+                        <span>PITCH FREQ</span>
+                        <span className="text-cyan-400 font-bold">{synthSettings.dronePitch}Hz</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="55" 
+                        max="330" 
+                        step="55"
+                        value={synthSettings.dronePitch} 
+                        onChange={(e) => handleSynthChange('dronePitch', parseInt(e.target.value))}
+                        className="w-full accent-cyan-400 h-1 bg-stone-900 border border-stone-800 rounded-lg cursor-pointer"
+                      />
+                      <div className="flex justify-between text-slate-400">
+                        <span>VOLUME</span>
+                        <span className="text-cyan-400 font-bold">{Math.round(synthSettings.droneVolume * 100)}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="0.4" 
+                        step="0.01"
+                        value={synthSettings.droneVolume} 
+                        onChange={(e) => handleSynthChange('droneVolume', parseFloat(e.target.value))}
+                        className="w-full accent-cyan-400 h-1 bg-stone-900 border border-stone-800 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  {/* CH2: Impact Pluck */}
+                  <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded">
+                    <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold mb-1.5">
+                      <span>CH2: IMPACT PLUCK</span>
+                      <Music className="w-2.5 h-2.5 text-fuchsia-500" />
+                    </div>
+                    <div className="flex gap-1 mb-2">
+                      {(['sine', 'triangle', 'sawtooth', 'square'] as OscillatorType[]).map((wave) => (
+                        <button
+                          key={wave}
+                          onClick={() => handleSynthChange('pluckWaveform', wave)}
+                          className={`flex-1 text-[7px] py-0.5 rounded border transition-all ${
+                            synthSettings.pluckWaveform === wave
+                              ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-300 font-bold'
+                              : 'bg-white/5 border-transparent text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {wave.toUpperCase().slice(0, 3)}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="space-y-1 text-[8px]">
+                      <div className="flex justify-between text-slate-400">
+                        <span>VOLUME</span>
+                        <span className="text-fuchsia-400 font-bold">{Math.round(synthSettings.pluckVolume * 100)}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="0.8" 
+                        step="0.02"
+                        value={synthSettings.pluckVolume} 
+                        onChange={(e) => handleSynthChange('pluckVolume', parseFloat(e.target.value))}
+                        className="w-full accent-fuchsia-400 h-1 bg-stone-900 border border-stone-800 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  {/* CH3: Echo Space Delay */}
+                  <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded">
+                    <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold mb-1.5">
+                      <span>CH3: ECO SPACE DELAY</span>
+                      <Sliders className="w-2.5 h-2.5 text-amber-500" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-[8px]">
+                      <div className="space-y-1 flex flex-col justify-end">
+                        <div className="flex justify-between text-slate-500 font-bold">
+                          <span>TIME</span>
+                          <span className="text-amber-400 font-bold">{Math.round(synthSettings.delayTime * 1000)}ms</span>
+                        </div>
+                        <input 
+                          type="range" 
+                          min="0.05" 
+                          max="0.8" 
+                          step="0.01"
+                          value={synthSettings.delayTime} 
+                          onChange={(e) => handleSynthChange('delayTime', parseFloat(e.target.value))}
+                          className="w-full accent-amber-500 h-1 bg-stone-900 border border-stone-800 rounded-lg cursor-pointer"
+                        />
+                      </div>
+                      <div className="space-y-1 flex flex-col justify-end">
+                        <div className="flex justify-between text-slate-500 font-bold">
+                          <span>FEEDBACK</span>
+                          <span className="text-amber-400 font-bold">{Math.round(synthSettings.delayFeedbackVal * 100)}%</span>
+                        </div>
+                        <input 
+                          type="range" 
+                          min="0" 
+                          max="0.85" 
+                          step="0.01"
+                          value={synthSettings.delayFeedbackVal} 
+                          onChange={(e) => handleSynthChange('delayFeedbackVal', parseFloat(e.target.value))}
+                          className="w-full accent-amber-500 h-1 bg-stone-900 border border-stone-800 rounded-lg cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CH4: Master Out & Oscilloscope */}
+                  <div className="bg-[#0c0c12]/85 p-2 border border-white/10 rounded flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold">
+                      <span>CH4: MASTER GAIN & OSCILLOSCOPE</span>
+                      <Activity className="w-2.5 h-2.5 text-fuchsia-400 animate-pulse" />
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 space-y-1 text-[8px]">
+                        <input 
+                          type="range" 
+                          min="0" 
+                          max="1.0" 
+                          step="0.05"
+                          value={synthSettings.masterVolume} 
+                          onChange={(e) => handleSynthChange('masterVolume', parseFloat(e.target.value))}
+                          className="w-full accent-fuchsia-400 h-1.5 bg-stone-950 border border-stone-800 rounded-lg cursor-pointer"
+                        />
+                        <div className="flex justify-between text-slate-500 text-[7px]">
+                          <span>GAIN OUT:</span>
+                          <span className="text-fuchsia-400 font-bold">{Math.round(synthSettings.masterVolume * 100)}%</span>
+                        </div>
+                      </div>
+                      
+                      {/* Real-time Oscilloscope */}
+                      <div className="w-28 shrink-0 bg-[#040406] border border-cyan-500/15 rounded p-1 flex flex-col items-center">
+                        <canvas 
+                          id="synthOscilloscope" 
+                          width="112" 
+                          height="36" 
+                          className="w-full h-8" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
           </div>
-          <div className="w-full h-0.5 sm:h-1 bg-slate-800 mt-2 sm:mt-4 overflow-hidden rounded-full">
-            <div 
-              style={{ width: `${tensionPercent}%` }}
-              className="h-full bg-cyan-400 transition-all duration-75 shadow-[0_0_8px_rgba(34,211,238,0.5)]" 
-            />
+
+          {/* Small aesthetic footer credit inside sidebar */}
+          <div className="text-center text-[8px] text-slate-600 tracking-wider uppercase mt-1 mb-4">
+            Vector Waveform Balance Engine • v1.0.8
           </div>
+
         </div>
-
-        {/* Divider */}
-        <div className="h-8 sm:h-16 w-px bg-slate-800 self-center" />
-
-        {/* Output Panel */}
-        <div className="flex flex-col items-center w-24 sm:w-48">
-          <span className="text-[8px] sm:text-[10px] tracking-[0.1em] sm:tracking-[0.3em] text-slate-500 mb-1 sm:mb-2 uppercase">Output</span>
-          <div className="text-xl sm:text-5xl font-light tracking-tighter text-fuchsia-500 tabular-nums">
-            {metrics.output.toString().padStart(3, '0')}
-          </div>
-          <div className="w-full h-0.5 sm:h-1 bg-slate-800 mt-2 sm:mt-4 overflow-hidden rounded-full">
-            <div 
-              style={{ width: `${forcePercent}%` }}
-              className="h-full bg-fuchsia-500 transition-all duration-75 shadow-[0_0_8px_rgba(217,70,239,0.5)]" 
-            />
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Footer Right (Adaptive Status) */}
-      <div className="absolute bottom-2 sm:bottom-10 right-2 sm:right-10 text-right text-[8px] sm:text-[10px] text-slate-600 tracking-widest uppercase pointer-events-none flex flex-col gap-0.5 sm:gap-1">
-        <div className="text-cyan-400 font-mono mb-1">{stateRef.current.bpm} BPM</div>
-        <div className="hidden sm:block">Vector Balance Engine v1.0.8</div>
-        <div className="text-slate-400/50">Status: {stateRef.current.isDragging ? 'DRAG' : 'IDLE'}</div>
       </div>
     </div>
   );
