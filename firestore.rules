@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. catch-all default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. aetherium_nodes core operational nervous system rules
+    match /aetherium_nodes/{nodeId} {
+      // Allowing read access for all clients so visual oscillations are physically synchronized across users.
+      allow read: if true;
+
+      // Restricting write access completely on the client side.
+      // All modifications are brokered asynchronously via the server SEDA webhook.
+      allow write: if false;
+    }
+  }
+}

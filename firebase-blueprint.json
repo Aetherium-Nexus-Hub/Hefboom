@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "AetherNode": {
+      "title": "Aether Node",
+      "description": "An operational quadrant node in the Aetherium SEDA system",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier of the node, mapping to the quadrants (travguild_hub, trinity_spark, observer_anchor, hens_bedrock)"
+        },
+        "flux_intensity": {
+          "type": "number",
+          "description": "Intensity of the energy flux inside hens_bedrock"
+        },
+        "wave_output_Y": {
+          "type": "number",
+          "description": "Current global wave phase output Y computed through emotional matrix"
+        },
+        "phase_angle": {
+          "type": "number",
+          "description": "Phase angle of the wave osculation"
+        },
+        "base_amplitude": {
+          "type": "number",
+          "description": "Starting/base amplitude scale of the wave"
+        },
+        "geographical_friction": {
+          "type": "number",
+          "description": "Frictional resistance applied to kinetic updates"
+        },
+        "volatility_multiplier": {
+          "type": "number",
+          "description": "Dynamic volatility tracking for trinity spark events"
+        },
+        "last_sovereign_strike": {
+          "type": "string",
+          "description": "ISO timestamp of the last kinetic shift strike registered"
+        },
+        "last_updated": {
+          "type": "string",
+          "description": "ISO timestamp of the last state revision"
+        },
+        "logs": {
+          "type": "array",
+          "description": "List of historical prophetic insights for the node"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/aetherium_nodes/{nodeId}": {
+      "schema": "AetherNode",
+      "description": "A collection containing the four quadrant anchor documents defining the current matrix state"
+    }
+  }
+}

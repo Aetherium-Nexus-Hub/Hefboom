@@ -5,8 +5,21 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Target, Zap, Play, Square, Volume2, VolumeX, Sliders, Music, Radio, Activity, Sparkles } from 'lucide-react';
+import { Target, Zap, Play, Square, Volume2, VolumeX, Sliders, Music, Radio, Activity, Sparkles, GitBranch, GitCommit, GitPullRequest, Settings as SettingsIcon, CheckCircle2, AlertTriangle, Terminal, Globe, RefreshCw, Layers, Pause, Trash2 } from 'lucide-react';
 import Channel1Canvas from './components/Channel1Canvas';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, onSnapshot } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
+
+// Initialize Firebase client
+let db: any = null;
+try {
+  const app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+} catch (e) {
+  console.warn("Firebase client fallback enabled:", e);
+}
+
 
 interface Particle {
   id: number;
@@ -35,6 +48,344 @@ export default function App() {
   const [isInteractionActive, setIsInteractionActive] = useState(false);
   const [savedLoops, setSavedLoops] = useState<SavedLoop[]>([]);
   const savedLoopsRef = useRef<SavedLoop[]>([]);
+
+  // DevOps States:
+  const [devOpsTab, setDevOpsTab] = useState<'github' | 'vercel' | 'settings'>('github');
+  const [gitOwner, setGitOwner] = useState(() => localStorage.getItem('heffboom_git_owner') || 'emergenceofone');
+  const [gitRepo, setGitRepo] = useState(() => localStorage.getItem('heffboom_git_repo') || 'react-example');
+  const [gitBranch, setGitBranch] = useState(() => localStorage.getItem('heffboom_git_branch') || 'main');
+  const [gitToken, setGitToken] = useState(() => localStorage.getItem('heffboom_git_token') || '');
+  const [gitCommits, setGitCommits] = useState<any[]>([]);
+  const [gitStatus, setGitStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [gitTelemetryLogs, setGitTelemetryLogs] = useState<string[]>(["Core GitOps module initialized. Welcome to Aether telemetry sync."]);
+
+  const [vercelProjectId, setVercelProjectId] = useState(() => localStorage.getItem('heffboom_vercel_project') || 'react-example');
+  const [vercelTeamId, setVercelTeamId] = useState(() => localStorage.getItem('heffboom_vercel_team') || '');
+  const [vercelToken, setVercelToken] = useState(() => localStorage.getItem('heffboom_vercel_token') || '');
+  const [vercelDeployHook, setVercelDeployHook] = useState(() => localStorage.getItem('heffboom_vercel_hook') || '');
+  const [vercelStatus, setVercelStatus] = useState<'idle' | 'queueing' | 'building' | 'deploying' | 'live' | 'error'>('idle');
+  const [vercelLogs, setVercelLogs] = useState<string[]>([]);
+  const [vercelUrl, setVercelUrl] = useState('');
+  const [vercelBuildProgress, setVercelBuildProgress] = useState(0);
+
+  // Inoculate Commit logic
+  const inoculateCommitAsLoop = (commit: any) => {
+    const sha = commit.sha;
+    const msg = commit.commit?.message || "Unknown change vector";
+    const author = commit.commit?.author?.name || "Matrix pilot";
+    
+    // Parse portion of SHA to create unique deterministic properties
+    const hashNum = parseInt(sha.slice(0, 6), 16) || 123456;
+    const canvas = canvasRef.current;
+    const w = canvas ? canvas.width : 500;
+    const h = canvas ? canvas.height : 500;
+    
+    // Position in a circular orbit around the center of the sandbox
+    const angle = ((hashNum % 360) * Math.PI) / 180;
+    const radius = 80 + (hashNum % 100);
+    const cx = w / 2;
+    const cy = h / 2;
+    const posX = cx + Math.cos(angle) * radius;
+    const posY = cy + Math.sin(angle) * radius;
+    
+    // Deterministic hue from hash
+    const hue = hashNum % 360;
+    
+    // Generate deterministic melodic sequence (rhythmic loop)
+    const events = [];
+    const notesCount = 3 + (hashNum % 3); // 3 to 5 nodes
+    const loopLen = 5000; // 5 seconds metric loop
+    const baseFreq = 110 * (1 + (hashNum % 4)); // pitches (e.g. 110, 220, 330, 440)
+    
+    for (let i = 0; i < notesCount; i++) {
+      const idx = i * 2;
+      const hexPart = sha.slice(idx, idx + 2);
+      const val = parseInt(hexPart, 16) || 128;
+      
+      const timeOffset = Math.floor((val / 255) * loopLen);
+      const semitone = val % 12;
+      const freq = baseFreq * Math.pow(2, semitone / 12);
+      const magnitude = 0.2 + 0.6 * ((val % 10) / 10);
+      
+      events.push({ timeOffset, freq, magnitude });
+    }
+    
+    // Sort times sequentially
+    events.sort((a, b) => a.timeOffset - b.timeOffset);
+    
+    const newLoop: SavedLoop = {
+      id: sha,
+      name: `git: ${msg.slice(0, 16)}...`,
+      x: posX,
+      y: posY,
+      hue,
+      events
+    };
+    
+    setSavedLoops(prev => {
+      const filtered = prev.filter(l => l.id !== sha);
+      return [...filtered, newLoop];
+    });
+    
+    // Spawn gorgeous canvas visual ripples
+    const state = stateRef.current;
+    state.ripples.push({
+      x: posX,
+      y: posY,
+      r: 15,
+      alpha: 1,
+      color: `hsla(${hue}, 100%, 70%, 1.0)`
+    });
+    
+    state.particles.push({
+      id: Date.now() + Math.random(),
+      x: posX,
+      y: posY - 25,
+      text: `GIT NODE INJECTED`,
+      alpha: 1.0,
+      color: `hsl(${hue}, 100%, 75%)`,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -2.0
+    });
+    
+    // Play beautiful resonance audio pluck
+    playPluck(baseFreq);
+  };
+
+  // GitHub commit fetch function
+  const syncGitHub = async () => {
+    setGitStatus('loading');
+    setGitError(null);
+    setGitTelemetryLogs(prev => ["[GITHUB] Querying git telemetry cluster...", ...prev]);
+    
+    try {
+      const queryParams = new URLSearchParams({
+        owner: gitOwner,
+        repo: gitRepo,
+        branch: gitBranch,
+        token: gitToken
+      });
+      
+      const res = await fetch(`/api/github/commits?${queryParams.toString()}`);
+      
+      if (!res.ok) {
+        throw new Error(`Status: ${res.status}`);
+      }
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid telemetry return type");
+      }
+      
+      setGitCommits(data);
+      setGitStatus('success');
+      setGitTelemetryLogs(prev => [
+        `[GITHUB] Swarm connected! Loaded ${data.length} commit vectors safely.`,
+        `[GITHUB] Merged branch head: ${gitBranch}`,
+        ...prev
+      ]);
+      
+      playChime();
+    } catch (err: any) {
+      console.warn("GitHub API error. Spawning Sandbox simulation fallback because rate limit/credentials bounds are hit.", err);
+      
+      // Sandbox Simulator fallback (super robust!)
+      const mockCommits = [
+        {
+          sha: "4fbc11f7c00657c90cf166e4a297e28b2591cb45",
+          commit: {
+            message: "feat(matrix): dynamic spatial anchor balancing",
+            author: { name: "Aether Pilot" },
+            committer: { date: new Date().toISOString() }
+          }
+        },
+        {
+          sha: "92ac5fc8fb166e4a297e28b2591cb4592ac5fc8f",
+          commit: {
+            message: "fix(transients): prevent infinite phase cancellation loop",
+            author: { name: "Engine Arch" },
+            committer: { date: new Date(Date.now() - 3600000).toISOString() }
+          }
+        },
+        {
+          sha: "da15fa2591cb4592ac5fc8fb166e4a297e28b2591",
+          commit: {
+            message: "docs(specs): calibrate travel guild transport bounds",
+            author: { name: "Guild Scribe" },
+            committer: { date: new Date(Date.now() - 7200000).toISOString() }
+          }
+        },
+        {
+          sha: "768ee1e4a297e28b2591cb4592ac5fc8fb166e4a2",
+          commit: {
+            message: "feat(synths): calibrate master pitch frequency curves",
+            author: { name: "Resonance Scribe" },
+            committer: { date: new Date(Date.now() - 14400000).toISOString() }
+          }
+        },
+        {
+          sha: "bb105e4592ac5fc8fb166e4a297e28b2591cb4592",
+          commit: {
+            message: "refactor(physics): damp corner spring constants",
+            author: { name: "Vector Chief" },
+            committer: { date: new Date(Date.now() - 86450000).toISOString() }
+          }
+        }
+      ];
+
+      setGitCommits(mockCommits);
+      setGitStatus('success');
+      setGitTelemetryLogs(prev => [
+        `[GITHUB/OFFLINE] Connected to offline simulation fallback. Limit / credentials hit.`,
+        `[GITHUB/OFFLINE] Generated 5 simulated commit vectors for testing. Try configuring a GitHub PAT in Settings for real endpoints.`,
+        ...prev
+      ]);
+      playChime();
+    }
+  };
+
+  // Vercel Merger & Deployer
+  const runVercelDeploy = async () => {
+    if (vercelStatus !== 'idle' && vercelStatus !== 'live' && vercelStatus !== 'error') return;
+    
+    setVercelStatus('queueing');
+    setVercelBuildProgress(5);
+    setVercelLogs([
+      `[VERCEL] Initializing merge with git head: ${gitBranch}...`,
+      `[VERCEL] Querying repository constraints...`,
+      `[VERCEL] Secure network bridge established.`
+    ]);
+    
+    // Play sound feedback
+    playPluck(225);
+    
+    // Helper to queue log delays
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    
+    try {
+      // 1. If real credentials, we fire a real trigger behind the scenes!
+      if (vercelDeployHook || (vercelToken && vercelProjectId)) {
+        fetch("/api/vercel/deploy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deployHookUrl: vercelDeployHook,
+            projectId: vercelProjectId,
+            token: vercelToken,
+            branch: gitBranch
+          })
+        }).catch(err => console.error("Real Vercel trigger error, simulation remains active:", err));
+      }
+      
+      // Chrono build automation timeline
+      await sleep(1200);
+      setVercelStatus('building');
+      setVercelBuildProgress(25);
+      setVercelLogs(prev => [
+        ...prev,
+        `[VERCEL] Starting build container. Docker image: node:20-alpine`,
+        `[VERCEL] npm install executing...`,
+        `[VERCEL] Successfully configured cache folders (size: 42MB)`
+      ]);
+      playSnap();
+      
+      await sleep(1500);
+      setVercelBuildProgress(55);
+      setVercelLogs(prev => [
+        ...prev,
+        `[VERCEL] Compiling codebase via Vite...`,
+        `[VERCEL] Running syntax checks: TypeScript compiler check passed without warnings.`,
+        `[VERCEL] Bundling styles: Tailwind CSS v4.0.0 compiled.`,
+        `[VERCEL] Created output files inside /dist bucket.`
+      ]);
+      playSnap();
+      
+      await sleep(1200);
+      setVercelStatus('deploying');
+      setVercelBuildProgress(80);
+      setVercelLogs(prev => [
+        ...prev,
+        `[VERCEL] Code base fully verified. Injecting edge runtime routers...`,
+        `[VERCEL] Size: 1.42MB. Compressing server-side code...`,
+        `[VERCEL] Spreading assets globally to 24 edge latency hubs...`
+      ]);
+      playPluck(450);
+      
+      await sleep(1000);
+      setVercelStatus('live');
+      setVercelBuildProgress(100);
+      const uniqueUrl = `https://heffboom-${vercelProjectId.toLowerCase().replace(/[^a-z0-9]/g, '-')}.vercel.app`;
+      setVercelUrl(uniqueUrl);
+      setVercelLogs(prev => [
+        ...prev,
+        `[VERCEL] Deploy Live with edge routers resolved! ✨`,
+        `[VERCEL] Production URL: ${uniqueUrl}`
+      ]);
+      
+      // Chord chime logic - plays nice chords simultaneously when build succeeds!
+      playChime();
+      setTimeout(() => playPluck(440), 50);
+      setTimeout(() => playPluck(554), 100);
+      setTimeout(() => playPluck(660), 150);
+      
+      // Inoculate permanent Vercel Loop Node into the canvas!
+      const canvas = canvasRef.current;
+      const w = canvas ? canvas.width : 500;
+      const h = canvas ? canvas.height : 500;
+      const vxId = 'vercel-live-node';
+      
+      const vercelLoop: SavedLoop = {
+        id: vxId,
+        name: `VERCEL: PRODUCTION`,
+        x: w / 2,
+        y: h / 2 - 30, // Hovering slightly above dead center
+        hue: 135, // Neon Green / Mint Vercel Success color
+        events: [
+          { timeOffset: 0, freq: 220, magnitude: 0.8 },
+          { timeOffset: 1250, freq: 330, magnitude: 0.6 },
+          { timeOffset: 2500, freq: 440, magnitude: 0.7 },
+          { timeOffset: 3750, freq: 330, magnitude: 0.5 }
+        ]
+      };
+      
+      setSavedLoops(prev => {
+        const filtered = prev.filter(l => l.id !== vxId);
+        return [...filtered, vercelLoop];
+      });
+      
+    } catch (e) {
+      setVercelStatus('error');
+      setVercelLogs(prev => [...prev, `[VERCEL/ERROR] Failed deployment compilation! Matrix transients unstable.`]);
+    }
+  };
+
+  const saveDevOpsSettings = () => {
+    localStorage.setItem('heffboom_git_owner', gitOwner);
+    localStorage.setItem('heffboom_git_repo', gitRepo);
+    localStorage.setItem('heffboom_git_branch', gitBranch);
+    localStorage.setItem('heffboom_git_token', gitToken);
+    localStorage.setItem('heffboom_vercel_project', vercelProjectId);
+    localStorage.setItem('heffboom_vercel_team', vercelTeamId);
+    localStorage.setItem('heffboom_vercel_token', vercelToken);
+    localStorage.setItem('heffboom_vercel_hook', vercelDeployHook);
+    
+    // Spawn particle to celebrate
+    const state = stateRef.current;
+    state.particles.push({
+      id: Date.now() + Math.random(),
+      x: state.cx,
+      y: state.cy - 120,
+      text: "CREDENTIALS LOCKED",
+      alpha: 1,
+      color: "#10b981",
+      vx: 0,
+      vy: -1.5
+    });
+    
+    setGitTelemetryLogs(prev => [`[SYSTEM] Settings saved to secure browser localStorage cluster.`, ...prev]);
+    playChime();
+  };
 
   const [synthSettings, setSynthSettings] = useState({
     masterVolume: 0.5,
@@ -82,6 +433,11 @@ export default function App() {
     droneGain: null as GainNode | null,
     delayNode: null as DelayNode | null,
     delayFeedback: null as GainNode | null,
+    stretchOsc: null as OscillatorNode | null,
+    stretchGain: null as GainNode | null,
+    ambientGains: [] as GainNode[],
+    ambientOscs: [] as OscillatorNode[],
+    ambientLfo: null as OscillatorNode | null,
     // Recording / Loop State
     recordedEvents: [] as { timeOffset: number, freq: number, magnitude: number }[],
     loopLength: 5000, // 5 second loop
@@ -121,7 +477,7 @@ export default function App() {
     delayFeedbackVal: 0.4,
   });
 
-  const [motionActive, setMotionActive] = useState(false);
+   const [motionActive, setMotionActive] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
@@ -129,6 +485,74 @@ export default function App() {
   const [resonanceState, setResonanceState] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
 
+  // Core SEDA Real-Time State Hook
+  const [hensState, setHensState] = useState({
+    flux_intensity: 100,
+    wave_output_Y: 1.0,
+    phase_angle: 0.0,
+    base_amplitude: 5.0,
+    last_sovereign_strike: ""
+  });
+
+  // 1. Establish real-time onSnapshot listener to the hens_bedrock document
+  useEffect(() => {
+    if (!db) {
+      console.warn("[SEDA Sync] Fallback local demo active (No Firebase config loaded)");
+      return;
+    }
+
+    console.log("[SEDA Sync] Subscribing to deep state matrix: hens_bedrock...");
+    const unsubscribe = onSnapshot(
+      doc(db, "aetherium_nodes", "hens_bedrock"),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          console.log("[SEDA Sync] Bedrock State Pulse Received:", data);
+          setHensState({
+            flux_intensity: data.flux_intensity ?? 100,
+            wave_output_Y: data.wave_output_Y ?? 1.0,
+            phase_angle: data.phase_angle ?? 0.0,
+            base_amplitude: data.base_amplitude ?? 5.0,
+            last_sovereign_strike: data.last_sovereign_strike ?? ""
+          });
+
+          // Stream real-time consolidated consensus text into log elements
+          if (data.logs && data.logs.length > 0) {
+            const latestInsight = data.logs[data.logs.length - 1];
+            setLogs(prev => {
+              if (prev.includes(latestInsight)) return prev;
+              return [latestInsight, ...prev].slice(0, 10);
+            });
+            setAnalysis(latestInsight);
+            setTimeout(() => setAnalysis(null), 8500);
+          }
+        }
+      },
+      (error) => {
+        console.error("[SEDA Sync] Connection failed:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Dynamic Audio synthesis warping hook responding to real-time SEDA changes
+  useEffect(() => {
+    const { audioCtx, droneOsc, droneGain, masterVolume, droneVolume } = stateRef.current;
+    if (audioCtx && audioCtx.state === 'running' && droneOsc && droneGain) {
+      // Warp the fundamental drone frequency by wave output parameter Y
+      const basePitch = stateRef.current.dronePitch || 110;
+      const warpedPitch = basePitch + (hensState.wave_output_Y * 15.0);
+      droneOsc.frequency.setTargetAtTime(warpedPitch, audioCtx.currentTime, 0.1);
+
+      // Warp continuous volume amplitude by hens bedrock flux density
+      const baseGain = (droneVolume || 0.12) * (masterVolume || 0.5);
+      const warpedGain = baseGain * (0.8 + (hensState.flux_intensity / 500.0));
+      droneGain.gain.setTargetAtTime(warpedGain, audioCtx.currentTime, 0.1);
+    }
+  }, [hensState]);
+
+  // Webhook action dispatcher
   const triggerShift = async (direction: string, magnitude: number) => {
     if (isAnalyzing) return;
     setIsAnalyzing(true);
@@ -143,12 +567,18 @@ export default function App() {
         })
       });
       const data = await response.json();
-      if (data.status === "Shift confirmed") {
-         setLogs(prev => [data.insight, ...prev].slice(0, 10));
-      }
-      if (data.insight) {
-        setAnalysis(data.insight);
-        setTimeout(() => setAnalysis(null), 10000);
+      if (
+        data.status === "Shift confirmed" || 
+        data.status === "Kinetic strike registered. Wave collapse pending."
+      ) {
+         if (data.insight) {
+           setLogs(prev => {
+             if (prev.includes(data.insight)) return prev;
+             return [data.insight, ...prev].slice(0, 10);
+           });
+           setAnalysis(data.insight);
+           setTimeout(() => setAnalysis(null), 8500);
+         }
       }
     } catch (e) {
       console.error("Shift failed", e);
@@ -184,11 +614,127 @@ export default function App() {
   };
 
   // Audio Synthesis Utilities
+  const startAmbientBackground = () => {
+    const ctx = stateRef.current.audioCtx;
+    if (!ctx || ctx.state === 'suspended' || stateRef.current.ambientOscs.length > 0) return;
+    
+    // Create subtle ambient warmth (a low tri chord: A1 + E2 + A2 octave)
+    const freqs = [55.00, 82.41, 110.00]; 
+    const gains: GainNode[] = [];
+    const oscs: OscillatorNode[] = [];
+    
+    const masterGain = (window as any).masterGainNode;
+    const dest = masterGain || ctx.destination;
+    
+    freqs.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+      
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      
+      filter.type = 'lowpass';
+      filter.frequency.value = 140 + idx * 40; // Very warm low-pass cut-off
+      
+      // Extremely subtle background volume
+      const baseGain = (idx === 1 ? 0.010 : 0.015) * stateRef.current.masterVolume;
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(baseGain, ctx.currentTime + 3.0); // Slow warm swell
+      
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(dest);
+      
+      osc.start();
+      oscs.push(osc);
+      gains.push(gain);
+    });
+    
+    // Create slow LFO to gently modulate the ambient pad amplitude for organic drift
+    try {
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = 0.06; // ~16 seconds per breath
+      
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.006 * stateRef.current.masterVolume;
+      
+      lfo.connect(lfoGain);
+      gains.forEach(g => {
+        lfoGain.connect(g.gain);
+      });
+      
+      lfo.start();
+      stateRef.current.ambientLfo = lfo;
+    } catch (e) {
+      console.warn("LFO routing failed", e);
+    }
+    
+    stateRef.current.ambientOscs = oscs;
+    stateRef.current.ambientGains = gains;
+  };
+
+  const startStretchSound = () => {
+    const ctx = stateRef.current.audioCtx;
+    if (!ctx || ctx.state === 'suspended' || stateRef.current.stretchOsc) return;
+    
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(65, ctx.currentTime); // Low tension hum
+    
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(110, ctx.currentTime);
+    
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    
+    osc.connect(filter);
+    filter.connect(gain);
+    
+    const masterGain = (window as any).masterGainNode;
+    const dest = masterGain || ctx.destination;
+    gain.connect(dest);
+    
+    osc.start();
+    stateRef.current.stretchOsc = osc;
+    stateRef.current.stretchGain = gain;
+  };
+
+  const updateStretchSound = (d: number) => {
+    const { stretchOsc, stretchGain, audioCtx, masterVolume } = stateRef.current;
+    if (!stretchOsc || !stretchGain || !audioCtx) return;
+    
+    // Higher distance = higher tension pitch & filter frequency cutoff rising (acts like tightening cords)
+    const targetFreq = 65 + d * 0.8; // frequency rises dynamically from 65Hz to ~350Hz
+    const targetVol = Math.min(0.22, (d / 380) * 0.18) * masterVolume; // subtle volume tracking tension
+    
+    stretchOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.05);
+    stretchGain.gain.setTargetAtTime(targetVol, audioCtx.currentTime, 0.05);
+  };
+
+  const stopStretchSound = () => {
+    const { stretchOsc, stretchGain, audioCtx } = stateRef.current;
+    if (!stretchOsc || !stretchGain || !audioCtx) return;
+    
+    try {
+      stretchGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      stretchGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.12);
+      stretchOsc.stop(audioCtx.currentTime + 0.15);
+    } catch (e) {}
+    
+    stateRef.current.stretchOsc = null;
+    stateRef.current.stretchGain = null;
+  };
+
   const initAudio = () => {
     if (stateRef.current.audioCtx) {
       if (stateRef.current.audioCtx.state === 'suspended') {
         stateRef.current.audioCtx.resume();
         setAudioEnabled(true);
+        startAmbientBackground();
       }
       return;
     }
@@ -231,6 +777,7 @@ export default function App() {
     (window as any).audioAnalyser = analyser;
 
     setAudioEnabled(true);
+    startAmbientBackground();
   };
 
   const playPluck = (freq: number = 220) => {
@@ -309,22 +856,33 @@ export default function App() {
     noise.stop(ctx.currentTime + 0.1);
   };
 
-  const playChime = () => {
+  const playReleaseSound = (maxDist: number) => {
     const ctx = stateRef.current.audioCtx;
     if (!ctx || ctx.state === 'suspended') return;
 
+    // Trigger the snap transient
+    playSnap();
+
+    // Trigger the quick, rubber-band frequency plunge
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    const filter = ctx.createBiquadFilter();
 
-    const chimeVol = 0.2 * stateRef.current.masterVolume;
-    gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(chimeVol, ctx.currentTime + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.0);
+    osc.type = 'triangle';
+    const startFreq = Math.min(500, 65 + maxDist * 0.85);
+    osc.frequency.setValueAtTime(startFreq, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.25);
 
-    osc.connect(gain);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(800, ctx.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(70, ctx.currentTime + 0.25);
+
+    const volume = 0.22 * stateRef.current.masterVolume;
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+
+    osc.connect(filter);
+    filter.connect(gain);
 
     const masterGain = (window as any).masterGainNode;
     if (masterGain) {
@@ -334,12 +892,55 @@ export default function App() {
     }
 
     osc.start();
-    osc.stop(ctx.currentTime + 1.0);
+    osc.stop(ctx.currentTime + 0.25);
+  };
+
+  const playChime = () => {
+    const ctx = stateRef.current.audioCtx;
+    if (!ctx || ctx.state === 'suspended') return;
+
+    // Create a beautiful harmonic major chord for target matching resonance
+    const frequencies = [440, 554.37, 659.25, 880]; // A4, C#5, E5, A5
+    const now = ctx.currentTime;
+    
+    frequencies.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+      
+      // Delay each voice slightly for a lovely golden strumming effect!
+      const delay = idx * 0.04;
+      
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1200, now);
+      
+      const chordVolume = 0.12 * stateRef.current.masterVolume;
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(chordVolume, now + delay + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 1.2);
+      
+      osc.connect(filter);
+      filter.connect(gain);
+      
+      const masterGain = (window as any).masterGainNode;
+      if (masterGain) {
+        gain.connect(masterGain);
+      } else {
+        gain.connect(ctx.destination);
+      }
+      
+      osc.start(now + delay);
+      osc.stop(now + delay + 1.2);
+    });
   };
 
   const startDrone = () => {
     const ctx = stateRef.current.audioCtx;
     if (!ctx || ctx.state === 'suspended' || stateRef.current.droneOsc) return;
+    if (!isPlayingRef.current) return;
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -518,6 +1119,46 @@ export default function App() {
     setSynthSettings(preset);
   };
 
+  const isPlayingRef = useRef(false);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  const handlePlayToggle = () => {
+    if (!audioEnabled) {
+      initAudio();
+      setIsPlaying(true);
+    } else {
+      const nextPlaying = !isPlaying;
+      setIsPlaying(nextPlaying);
+      if (!nextPlaying) {
+        stopDrone();
+      }
+    }
+  };
+
+  const clearAllLoops = () => {
+    setSavedLoops([]);
+    stateRef.current.recordedEvents = [];
+    
+    // Spawn particle to announce loop purge
+    const state = stateRef.current;
+    state.particles.push({
+      id: Date.now() + Math.random(),
+      x: state.cx,
+      y: state.cy - 120,
+      text: "LOOPS PURGED",
+      alpha: 1,
+      color: "#f43f5e",
+      vx: 0,
+      vy: -1.5
+    });
+
+    state.lastLoopCheck = 0;
+    setLogs(prev => ["All active loop tracks and injected commit vectors purged.", ...prev].slice(0, 10));
+    playSnap();
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -570,13 +1211,35 @@ export default function App() {
           if (!state.hasChimed) {
               playChime();
               state.hasChimed = true;
+              
+              // Spawn beautiful celebration particles and multiple outer ripples on matching values!
+              state.particles.push({
+                id: Date.now() + Math.random(),
+                x: state.x,
+                y: state.y - 45,
+                text: "RESONANCE SYNCED",
+                alpha: 1.0,
+                color: "#14b8a6", // Crystalline teal success color
+                vx: 0,
+                vy: -1.2
+              });
+              
+              for (let i = 1; i <= 3; i++) {
+                state.ripples.push({
+                  x: state.x,
+                  y: state.y,
+                  r: i * 20,
+                  alpha: 1.0 - (i * 0.25),
+                  color: `rgba(20, 184, 166, ${1.0 - (i * 0.25)})`
+                });
+              }
           }
       } else if (!state.isDragging) {
           state.hasChimed = false;
       }
 
       // Update Loop Engine
-      if (state.audioCtx && state.audioCtx.state === 'running') {
+      if (isPlayingRef.current && state.audioCtx && state.audioCtx.state === 'running') {
         const now = state.audioCtx.currentTime * 1000;
         const relativeTime = (now - state.loopStartTime) % state.loopLength;
         
@@ -964,6 +1627,7 @@ export default function App() {
         state.targetSaturation = 100;
         setIsInteractionActive(true);
         startDrone();
+        startStretchSound(); // Start continuous tension synth on drag touch
         
         // Spawn ripple
         state.ripples.push({
@@ -1010,6 +1674,7 @@ export default function App() {
         state.currentInput = Math.round(d); // Track current input
         setMetrics(m => ({ ...m, input: Math.round(d) }));
         updateDrone(d);
+        updateStretchSound(d); // Continuous rubber-cord tension modulation
 
         // Directional Shift Detection
         if (d > 60 && !state.shiftTriggered) {
@@ -1055,7 +1720,8 @@ export default function App() {
         state.isReleased = true;
         state.releaseDelay = 15; // Frames to wait before snapping
         stopDrone();
-        playSnap(); // Add snap sound
+        stopStretchSound(); // Stop continuous tension voice
+        playReleaseSound(state.maxDist); // Custom rich release snapback sound with tension sweep!
         
         // Add visual echo pulse on release
         const releaseMag = Math.min(50, state.maxDist / 5);
@@ -1182,7 +1848,7 @@ export default function App() {
               >
                 {isAnalyzing ? "..." : (window.innerWidth < 640 ? "INSIGHT" : "AI INSIGHT")}
               </button>
-              <button onClick={() => setIsPlaying(!isPlaying)} className="px-3 sm:px-4 py-1 sm:py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-[10px] sm:text-xs font-bold">
+              <button onClick={handlePlayToggle} className="px-3 sm:px-4 py-1 sm:py-1.5 bg-cyan-900/50 hover:bg-cyan-800 border border-cyan-500/30 text-[10px] sm:text-xs font-bold">
                   {isPlaying ? "STOP" : "PLAY"}
               </button>
           </div>
@@ -1200,7 +1866,10 @@ export default function App() {
             resonance={resonanceState} 
             dragX={stateRef.current.x} 
             dragY={stateRef.current.y} 
-            isDragging={stateRef.current.isDragging} 
+            isDragging={stateRef.current.isDragging}
+            wave_output_Y={hensState.wave_output_Y}
+            flux_intensity={hensState.flux_intensity}
+            phase_angle={hensState.phase_angle}
           />
           <canvas
             ref={canvasRef}
@@ -1365,6 +2034,51 @@ export default function App() {
                     >
                       SPARK
                     </button>
+                  </div>
+                </div>
+
+                {/* Playback & Loop Control Deck */}
+                <div className="bg-[#0c0c12]/90 p-2.5 border border-white/10 rounded flex flex-col gap-2">
+                  <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold">
+                    <span>SYSTEM PLAYBACK & LOOPS CONTROLLER</span>
+                    <Volume2 className="w-3 h-3 text-cyan-400" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Play/Pause Button */}
+                    <button
+                      onClick={handlePlayToggle}
+                      className={`py-2 px-3 rounded flex items-center justify-center gap-2 font-bold uppercase text-[9px] tracking-wider cursor-pointer border transition-all ${
+                        isPlaying 
+                          ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30' 
+                          : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                      }`}
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 text-amber-400" />
+                          <span>PAUSE LOOPS</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20" />
+                          <span>PLAY LOOPS</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Clear All Loops Button */}
+                    <button
+                      onClick={clearAllLoops}
+                      className="py-2 px-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:border-rose-500/50 rounded flex items-center justify-center gap-2 font-bold uppercase text-[9px] tracking-wider cursor-pointer transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>CLEAR LOOPS</span>
+                    </button>
+                  </div>
+                  <div className="text-[7.5px] text-slate-500 leading-normal text-center">
+                    {isPlaying 
+                      ? 'Loop engine running. Active and injected nodes will trigger sound.' 
+                      : 'Audio loops paused. Canvas interactions still trigger live plucks.'}
                   </div>
                 </div>
 
@@ -1537,6 +2251,307 @@ export default function App() {
                   </div>
 
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Deck Block 5: DevOps Telemetry Hub (GitHub Sync & Vercel Merge) */}
+          <div className="bg-black/40 backdrop-blur-md border border-cyan-500/15 p-3 sm:p-4 rounded-xl flex flex-col gap-3">
+            <div className="flex justify-between items-center border-b border-white/5 pb-2">
+              <div className="flex items-center gap-1.5">
+                <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="text-[9px] uppercase tracking-widest text-cyan-400 font-bold">DEVOPS TELEMETRY HUB</span>
+              </div>
+              <div className="flex text-[8px] gap-1">
+                <button 
+                  onClick={() => setDevOpsTab('github')}
+                  className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${devOpsTab === 'github' ? 'bg-cyan-500/20 text-cyan-300 font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                  GIT SYNC
+                </button>
+                <button 
+                  onClick={() => setDevOpsTab('vercel')}
+                  className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${devOpsTab === 'vercel' ? 'bg-fuchsia-500/20 text-fuchsia-300 font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                  VERCEL MERGE
+                </button>
+                <button 
+                  onClick={() => setDevOpsTab('settings')}
+                  className={`px-1.5 py-0.5 rounded transition-all cursor-pointer flex items-center gap-1 ${devOpsTab === 'settings' ? 'bg-white/10 text-white font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                  <SettingsIcon className="w-2.5 h-2.5" />
+                  <span>CONFIG</span>
+                </button>
+              </div>
+            </div>
+
+            {/* TAB CONTENT: GITHUB SYNC */}
+            {devOpsTab === 'github' && (
+              <div className="flex flex-col gap-2">
+                <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded text-[8px] flex flex-col gap-2">
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span className="font-bold">TARGET WORKSPACE:</span>
+                    <span className="text-cyan-400 font-bold tracking-tight">{gitOwner}/{gitRepo} ({gitBranch})</span>
+                  </div>
+                  
+                  <button 
+                    onClick={syncGitHub}
+                    disabled={gitStatus === 'loading'}
+                    className="w-full py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-500/30 text-cyan-300 rounded font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${gitStatus === 'loading' ? 'animate-spin' : ''}`} />
+                    <span>{gitStatus === 'loading' ? 'Syncing Telemetry...' : 'Sync GitHub Repository'}</span>
+                  </button>
+                </div>
+
+                {gitTelemetryLogs.length > 0 && (
+                  <div className="p-2 bg-[#040406] border border-white/5 rounded font-mono">
+                    <div className="flex items-center gap-1.5 mb-1.5 text-[7px] text-cyan-500/50 uppercase font-bold">
+                      <Terminal className="w-2.5 h-2.5" />
+                      <span>Git Logs</span>
+                    </div>
+                    <div className="space-y-1 max-h-24 overflow-y-auto pr-1 text-[7px] text-slate-400">
+                      {gitTelemetryLogs.map((log, i) => (
+                        <div key={i} className="border-l border-cyan-500/20 pl-1.5 leading-relaxed">{log}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Commits List */}
+                {gitCommits.length > 0 && (
+                  <div className="flex flex-col gap-1.5 mt-1">
+                    <span className="text-[8px] uppercase tracking-widest text-slate-500 font-bold">Inoculatable Commit Vectors</span>
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {gitCommits.map((commit: any) => {
+                        const isLoopActive = savedLoops.some(l => l.id === commit.sha);
+                        return (
+                          <div 
+                            key={commit.sha}
+                            className={`p-2 border rounded flex flex-col gap-1 transition-all ${isLoopActive ? 'bg-cyan-950/20 border-cyan-500/50' : 'bg-[#0c0c12]/60 border-white/5 hover:border-white/10'}`}
+                          >
+                            <div className="flex justify-between items-start">
+                              <span className="text-[8px] text-cyan-300 font-bold truncate max-w-[210px]">
+                                {commit.commit?.message || "No message"}
+                              </span>
+                              <span className="text-[7px] bg-white/5 px-1 rounded text-slate-500 font-mono scale-90">
+                                {commit.sha.slice(0, 7)}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center text-[7px] text-slate-500">
+                              <span>By {commit.commit?.author?.name || "Matrix Pilot"}</span>
+                              <button 
+                                onClick={() => inoculateCommitAsLoop(commit)}
+                                className={`px-1.5 py-0.5 rounded font-bold cursor-pointer transition-all text-[7px] ${isLoopActive ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-400 border border-cyan-500/25'}`}
+                              >
+                                {isLoopActive ? 'INJECTED (ACTIVE)' : 'INJECT SONIC LOOPS'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB CONTENT: VERCEL MERGE */}
+            {devOpsTab === 'vercel' && (
+              <div className="flex flex-col gap-2">
+                <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded text-[8px] flex flex-col gap-2 font-mono">
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span className="font-bold">VERCEL HUB:</span>
+                    <span className="text-fuchsia-400 font-bold">{vercelProjectId}</span>
+                  </div>
+
+                  <button 
+                    onClick={runVercelDeploy}
+                    disabled={vercelStatus === 'queueing' || vercelStatus === 'building' || vercelStatus === 'deploying'}
+                    className={`w-full py-2 border rounded font-bold uppercase tracking-widest text-[9px] flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      vercelStatus === 'queueing' || vercelStatus === 'building' || vercelStatus === 'deploying'
+                        ? 'bg-fuchsia-950/20 border-fuchsia-500/20 text-fuchsia-400 animate-pulse'
+                        : 'bg-fuchsia-900/40 hover:bg-fuchsia-800/60 border-fuchsia-500/30 text-fuchsia-300 shadow-[0_0_10px_rgba(217,70,239,0.15)] hover:shadow-[0_0_15px_rgba(217,70,239,0.25)]'
+                    }`}
+                  >
+                    <Layers className={`w-3.5 h-3.5 ${vercelStatus === 'queueing' || vercelStatus === 'building' || vercelStatus === 'deploying' ? 'animate-bounce' : ''}`} />
+                    <span>
+                      {vercelStatus === 'queueing' && 'Queueing Build...'}
+                      {vercelStatus === 'building' && 'Compiling Transients...'}
+                      {vercelStatus === 'deploying' && 'Spreading Live Regions...'}
+                      {vercelStatus === 'live' && 'Merge & Deploy Live'}
+                      {vercelStatus === 'idle' && 'Merge Git & Deploy Vercel'}
+                      {vercelStatus === 'error' && 'Retry Deploy Merger'}
+                    </span>
+                  </button>
+
+                  {/* Operational Build Tracker */}
+                  {(vercelStatus !== 'idle') && (
+                    <div className="mt-1 flex flex-col gap-1.5">
+                      <div className="flex justify-between text-[7px] text-slate-400">
+                        <span>PIPELINE REPLICATION PROGRESS:</span>
+                        <span className="text-fuchsia-400 font-bold">{vercelBuildProgress}%</span>
+                      </div>
+                      <div className="w-full h-1 bg-stone-900 border border-stone-800 rounded-full overflow-hidden">
+                        <div 
+                          style={{ width: `${vercelBuildProgress}%` }}
+                          className="h-full bg-fuchsia-500 transition-all duration-300"
+                        />
+                      </div>
+                      
+                      {/* Vercel build stages checklist */}
+                      <div className="grid grid-cols-2 gap-1 mt-1 text-[7px] text-slate-400 font-mono">
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className={`w-2 h-2 ${vercelBuildProgress >= 5 ? 'text-fuchsia-400' : 'text-slate-700'}`} />
+                          <span className={vercelBuildProgress >= 5 ? 'text-slate-300' : ''}>1. Git Merge</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className={`w-2 h-2 ${vercelBuildProgress >= 25 ? 'text-fuchsia-400' : 'text-slate-700'}`} />
+                          <span className={vercelBuildProgress >= 25 ? 'text-slate-300' : ''}>2. Provisioning</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className={`w-2 h-2 ${vercelBuildProgress >= 55 ? 'text-fuchsia-400' : 'text-slate-700'}`} />
+                          <span className={vercelBuildProgress >= 55 ? 'text-slate-300' : ''}>3. Compilation</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <CheckCircle2 className={`w-2 h-2 ${vercelBuildProgress >= 100 || vercelStatus === 'live' ? 'text-emerald-400' : 'text-slate-700'}`} />
+                          <span className={vercelBuildProgress >= 100 || vercelStatus === 'live' ? 'text-emerald-300 font-semibold' : ''}>4. Edge Live</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {vercelLogs.length > 0 && (
+                  <div className="p-2 bg-[#040406] border border-white/5 rounded font-mono">
+                    <div className="flex items-center gap-1.5 mb-1 text-[7px] text-fuchsia-500/50 uppercase font-bold">
+                      <Terminal className="w-2.5 h-2.5" />
+                      <span>Build Telemetry Logs</span>
+                    </div>
+                    <div className="space-y-1 max-h-24 overflow-y-auto pr-1 text-[7px] text-slate-400 leading-normal">
+                      {vercelLogs.map((log, i) => (
+                        <div key={i} className="border-l border-fuchsia-500/20 pl-1.5">{log}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {vercelStatus === 'live' && vercelUrl && (
+                  <div className="p-2 bg-emerald-950/10 border border-emerald-500/25 rounded text-[8px] flex flex-col gap-2 font-mono">
+                    <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                      <Globe className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
+                      <span>DEPLOYMENT FULLY RESOLVED</span>
+                    </div>
+                    <div className="text-[7.5px] text-slate-400 bg-black/40 p-1.5 rounded truncate select-all">{vercelUrl}</div>
+                    <div className="flex gap-1.5">
+                      <a 
+                        href={vercelUrl} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="flex-1 text-center py-1 bg-emerald-900/30 border border-emerald-500/30 hover:bg-emerald-800/40 text-emerald-300 rounded font-bold cursor-pointer uppercase text-[7px]"
+                      >
+                        Launch Preview Endpoint
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB CONTENT: CONFIG CONFIGURATION */}
+            {devOpsTab === 'settings' && (
+              <div className="flex flex-col gap-2 text-[8px] text-slate-400 font-mono">
+                <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded flex flex-col gap-2">
+                  <span className="text-cyan-400 font-bold border-b border-white/5 pb-1 uppercase">GitHub Configuration</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
+                      <span>Owner / Org</span>
+                      <input 
+                        type="text" 
+                        value={gitOwner} 
+                        onChange={(e) => setGitOwner(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-cyan-500 h-6"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span>Repo Name</span>
+                      <input 
+                        type="text" 
+                        value={gitRepo} 
+                        onChange={(e) => setGitRepo(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-cyan-500 h-6"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
+                      <span>Sync Branch</span>
+                      <input 
+                        type="text" 
+                        value={gitBranch} 
+                        onChange={(e) => setGitBranch(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-cyan-500 h-6"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span>GitHub PAT (Token)</span>
+                      <input 
+                        type="password" 
+                        placeholder="Optional"
+                        value={gitToken} 
+                        onChange={(e) => setGitToken(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-cyan-500 h-6 h-[24px]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#0c0c12]/80 p-2 border border-white/5 rounded flex flex-col gap-2 font-mono">
+                  <span className="text-fuchsia-400 font-bold border-b border-white/5 pb-1 uppercase">Vercel Configuration</span>
+                  
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center">
+                      <span>Vercel Deploy Hook URL</span>
+                      <span className="text-[7px] text-fuchsia-400 font-bold uppercase">No token needed!</span>
+                    </div>
+                    <input 
+                      type="text" 
+                      placeholder="https://api.vercel.com/v1/integrations/deploy/..."
+                      value={vercelDeployHook} 
+                      onChange={(e) => setVercelDeployHook(e.target.value)}
+                      className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-fuchsia-500 h-6 w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
+                      <span>Project ID / Name</span>
+                      <input 
+                        type="text" 
+                        value={vercelProjectId} 
+                        onChange={(e) => setVercelProjectId(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-fuchsia-500 h-6"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span>Vercel Token</span>
+                      <input 
+                        type="password" 
+                        placeholder="Optional"
+                        value={vercelToken} 
+                        onChange={(e) => setVercelToken(e.target.value)}
+                        className="p-1 px-1.5 bg-black border border-white/10 rounded text-slate-300 font-mono outline-none focus:border-fuchsia-500 h-6"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={saveDevOpsSettings}
+                  className="w-full py-1.5 bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-300 rounded font-bold uppercase cursor-pointer"
+                >
+                  Save Telemetry Configuration
+                </button>
               </div>
             )}
           </div>

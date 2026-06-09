@@ -6,6 +6,9 @@ interface Channel1CanvasProps {
   dragX: number;
   dragY: number;
   isDragging: boolean;
+  wave_output_Y?: number;
+  flux_intensity?: number;
+  phase_angle?: number;
 }
 
 const Channel1Canvas: React.FC<Channel1CanvasProps> = ({ 
@@ -13,7 +16,10 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
   resonance, 
   dragX, 
   dragY, 
-  isDragging 
+  isDragging,
+  wave_output_Y = 1.0,
+  flux_intensity = 100.0,
+  phase_angle = 0.0
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -73,9 +79,9 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
             }
           }
 
-          // Add wave distortion
-          dx += Math.sin(time + i * 0.2) * (2 + resonance * 5);
-          dy += Math.cos(time + j * 0.2) * (2 + resonance * 5);
+          // Add wave distortion based on both kinetic drag and server-side global wave
+          dx += Math.sin(time + i * 0.2 + phase_angle) * (2 + resonance * 5 + Math.abs(wave_output_Y) * 3);
+          dy += Math.cos(time + j * 0.2 + phase_angle) * (2 + resonance * 5 + Math.abs(wave_output_Y) * 3);
 
           if (j === 0) {
             ctx.moveTo(x + dx, y + dy);
@@ -105,8 +111,8 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
             }
           }
 
-          dx += Math.sin(time + i * 0.2) * (2 + resonance * 5);
-          dy += Math.cos(time + j * 0.2) * (2 + resonance * 5);
+          dx += Math.sin(time + i * 0.2 + phase_angle) * (2 + resonance * 5 + Math.abs(wave_output_Y) * 3);
+          dy += Math.cos(time + j * 0.2 + phase_angle) * (2 + resonance * 5 + Math.abs(wave_output_Y) * 3);
 
           if (i === 0) {
             ctx.moveTo(x + dx, y + dy);
@@ -116,6 +122,30 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
         }
         ctx.stroke();
       }
+
+      // Draw fluorescent glowing physical wave on the oscilloscope
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(0, 255, 136, ${0.25 + (Math.abs(wave_output_Y) * 0.25)})`;
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 10 + (Math.abs(wave_output_Y) * 10);
+      ctx.shadowColor = "rgba(0, 255, 136, 0.6)";
+
+      const centerY = canvas.height / 2;
+      for (let x = 0; x <= canvas.width; x += 4) {
+        const theta = (x / canvas.width) * Math.PI * 4 + time + phase_angle;
+        // Frequency proportional to flux intensity, amplitude scaled by wave Y
+        const amp = (wave_output_Y * 20.0) * (1.0 + resonance);
+        const cycle = Math.sin(theta * (1.0 + (flux_intensity - 100) * 0.005)) * amp;
+        const finalY = centerY + cycle;
+
+        if (x === 0) {
+          ctx.moveTo(x, finalY);
+        } else {
+          ctx.lineTo(x, finalY);
+        }
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0; // reset glow
 
       // Scanner Line
       const scannerY = (Math.sin(time * 0.5) * 0.5 + 0.5) * canvas.height;
@@ -135,7 +165,7 @@ const Channel1Canvas: React.FC<Channel1CanvasProps> = ({
       resizeObserver.disconnect();
       cancelAnimationFrame(animationFrameId);
     };
-  }, [dragX, dragY, isDragging, magnitude, resonance]);
+  }, [dragX, dragY, isDragging, magnitude, resonance, wave_output_Y, flux_intensity, phase_angle]);
 
   return (
     <canvas 
